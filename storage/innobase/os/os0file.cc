@@ -4096,7 +4096,7 @@ bool os_aio_init(ulint n_reader_threads, ulint n_writer_threads, ulint)
 {
 	int max_write_events = (int)n_writer_threads * OS_AIO_N_PENDING_IOS_PER_THREAD;
 	int max_read_events = (int)n_reader_threads * OS_AIO_N_PENDING_IOS_PER_THREAD;
-#ifdef _WIN32
+#if defined (_WIN32)
 	pool = tpool::create_thread_pool_win();
 #else
 	pool = tpool::create_thread_pool_generic();

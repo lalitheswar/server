@@ -41,6 +41,7 @@ namespace tpool
   extern aio* create_win_aio(thread_pool* tp, int max_io);
 #endif
 
+  static const std::chrono::milliseconds LONG_TASK_DURATION = std::chrono::milliseconds(500);
 
 /**
   Implementation of generic threadpool.
@@ -79,7 +80,6 @@ class thread_pool_generic : public thread_pool
     WAKE_REASON_TASK,
     WAKE_REASON_SHUTDOWN
   };
-
   /* A per-worker  structure.*/
   struct worker_data
   {
@@ -93,15 +93,31 @@ class thread_pool_generic : public thread_pool
       If worker wakes up with WAKE_REASON_TASK, this the task it needs to execute.
     */
     task m_task;
-
-    worker_data() : m_cv(), m_wake_reason(WAKE_REASON_NONE), m_task{ 0, 0 } {}
+    worker_data *m_prev;
+    worker_data *m_next;
+    bool m_is_executing_task;
+    bool m_is_long_task;
+    std::chrono::system_clock::time_point m_task_start_time;
+    worker_data() :
+      m_cv(),
+      m_wake_reason(WAKE_REASON_NONE),
+      m_task{ 0, 0 },
+      m_prev(),
+      m_next(),
+      m_is_executing_task(),
+      m_is_long_task(),
+      m_task_start_time()
+      {}
   };
-
+  cache<worker_data> m_thread_data_cache;
   /** The task queue */
   circular_queue<task> m_task_queue;
 
   /* List of standby (idle) workers.*/
-  std::vector<worker_data *> m_standby_threads;
+  doubly_linked_list<worker_data> m_standby_threads;
+
+  /** List of threads that are executing tasks. */
+  doubly_linked_list<worker_data> m_active_threads;
 
   /* Mutex that protects the whole struct, most importantly 
   the standby threads list, and task queue. */
@@ -127,12 +143,6 @@ class thread_pool_generic : public thread_pool
   /** The timer thread. Will be join()ed on shutdown.*/
   std::thread m_timer_thread;
 
-  /** Current number of workers (both active and standby)*/
-  int m_threads;
-
-  /** Current number of workers that execute tasks. */
-  int m_active_threads;
-
   /** Overall number of dequeued tasks. */
   int m_tasks_dequeued;
 
@@ -145,8 +155,11 @@ class thread_pool_generic : public thread_pool
   */
   int m_spurious_wakeups;
 
+  /**
+  Number of long executing tasks
+  */
   /**  The desired concurrency.  This number of workers should be actively executing.*/
-  int m_concurrency;
+  unsigned int m_concurrency;
 
   /** True, if threadpool is being shutdown, false otherwise */
   bool m_in_shutdown;
@@ -156,15 +169,20 @@ class thread_pool_generic : public thread_pool
     workers, timer is not started, and m_timer_on will be false.
   */
   bool m_timer_on;
-
+  /** Last time timer ran, used as very coarse clock. */
+  std::chrono::system_clock::time_point m_timestamp;
+  /** Number of long running tasks. The long running tasks are excluded when 
+  adjusting concurrency */
+  int m_long_tasks_count;
+  std::chrono::system_clock::time_point m_last_thread_creation;
   /** Minimumal number of threads in this pool.*/
-  int m_min_threads;
+  unsigned int m_min_threads;
 
   /** Maximal number of threads in this pool. */
-  int m_max_threads;
+  unsigned int m_max_threads;
 
-  void worker_main();
-  void worker_end();
+  void worker_main(worker_data *thread_data);
+  void worker_end(worker_data* thread_data);
   void timer_main();
   bool add_thread();
   bool wake(worker_wake_reason reason, const task *t= nullptr);
@@ -174,6 +192,10 @@ class thread_pool_generic : public thread_pool
                       worker_data *thread_var);
   void timer_start();
   void timer_stop();
+  size_t thread_count()
+  {
+    return m_active_threads.size() + m_standby_threads.size();
+  }
 public:
   thread_pool_generic(int min_threads, int max_threads);
   ~thread_pool_generic();
@@ -204,8 +226,8 @@ bool thread_pool_generic::wait_for_tasks(std::unique_lock<std::mutex> &lk,
   assert(!m_in_shutdown);
 
   thread_data->m_wake_reason= WAKE_REASON_NONE;
+  m_active_threads.erase(thread_data);
   m_standby_threads.push_back(thread_data);
-  m_active_threads--;
 
   for (;;)
   {
@@ -215,7 +237,7 @@ bool thread_pool_generic::wait_for_tasks(std::unique_lock<std::mutex> &lk,
       return true;
     }
 
-    if (m_threads <= m_min_threads)
+    if (thread_count() <= m_min_threads)
     {
       continue;
     }
@@ -225,14 +247,10 @@ bool thread_pool_generic::wait_for_tasks(std::unique_lock<std::mutex> &lk,
       all other cases where it is signaled it is removed by the signaling
       thread.
     */
-    auto it= std::find(m_standby_threads.begin(), m_standby_threads.end(),
-                       thread_data);
-    m_standby_threads.erase(it);
-    m_active_threads++;
+    m_standby_threads.erase(thread_data);
+    m_active_threads.push_back(thread_data);
     return false;
   }
-
-  return !m_task_queue.empty() && m_threads >= m_min_threads;
 }
 
 /** 
@@ -246,7 +264,15 @@ bool thread_pool_generic::wait_for_tasks(std::unique_lock<std::mutex> &lk,
 */
 bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
 {
+  bool task_queue_was_full = false;
   std::unique_lock<std::mutex> lk(m_mtx);
+  thread_var->m_is_executing_task = false;
+  if (thread_var->m_is_long_task && m_long_tasks_count)
+  {
+    m_long_tasks_count--;
+  }
+  thread_var->m_is_long_task = false;
+
   if (m_task_queue.empty())
   {
     if (m_in_shutdown)
@@ -260,7 +286,7 @@ bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
     {
       *t= thread_var->m_task;
       thread_var->m_task.m_func= 0;
-      return true;
+      goto end;
     }
 
     if (m_task_queue.empty())
@@ -268,7 +294,7 @@ bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
   }
 
   /* Dequeue from the task queue.*/
-  bool task_queue_was_full= m_task_queue.full();
+  task_queue_was_full= m_task_queue.full();
   *t= m_task_queue.front();
   m_task_queue.pop();
   m_tasks_dequeued++;
@@ -281,17 +307,19 @@ bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
     */
     m_cv_queue_not_full.notify_all();
   }
+end:
+  thread_var->m_is_executing_task = true;
+  thread_var->m_task_start_time = m_timestamp;
   return true;
 }
 
 /** Worker thread shutdown routine. */
-void thread_pool_generic::worker_end()
+void thread_pool_generic::worker_end(worker_data* thread_data)
 {
   std::lock_guard<std::mutex> lk(m_mtx);
-  m_threads--;
-  m_active_threads--;
+  m_active_threads.erase(thread_data);
 
-  if (!m_threads && m_in_shutdown)
+  if (!thread_count() && m_in_shutdown)
   {
     /* Signal the destructor that no more threads are left. */
     m_cv_no_threads.notify_all();
@@ -299,15 +327,14 @@ void thread_pool_generic::worker_end()
 }
 
 /* The worker get/execute task loop.*/
-void thread_pool_generic::worker_main()
+void thread_pool_generic::worker_main(worker_data *thread_var)
 {
-  worker_data thread_var;
   task task;
 
   if(m_worker_init_callback)
    m_worker_init_callback();
 
-  while (get_task(&thread_var, &task))
+  while (get_task(thread_var, &task))
   {
     task.m_func(task.m_arg);
   }
@@ -315,50 +342,101 @@ void thread_pool_generic::worker_main()
   if (m_worker_destroy_callback)
     m_worker_destroy_callback();
 
-  worker_end();
+  worker_end(thread_var);
+  m_thread_data_cache.put(thread_var);
 }
 
 void thread_pool_generic::timer_main()
 {
   int last_tasks_dequeued= 0;
-  int last_threads= 0;
+  size_t last_threads= 0;
   for (;;)
   {
     std::unique_lock<std::mutex> lk(m_mtx);
     m_cv_timer.wait_for(lk, m_timer_interval);
+    m_timestamp = std::chrono::system_clock::now();
+
+    m_long_tasks_count = 0;
 
     if (!m_timer_on || (m_in_shutdown && m_task_queue.empty()))
       return;
     if (m_task_queue.empty())
       continue;
 
-    if (m_active_threads < m_concurrency)
+    for (auto thread_data = m_active_threads.front();
+      thread_data;
+      thread_data = thread_data->m_next)
+    {
+      if (thread_data->m_is_executing_task &&
+        (thread_data->m_is_long_task || (m_timestamp - thread_data->m_task_start_time > LONG_TASK_DURATION)))
+      {
+        thread_data->m_is_long_task = true;
+        m_long_tasks_count++;
+      }
+    }
+    size_t thread_cnt = thread_count();
+    if (m_active_threads.size() - m_long_tasks_count < m_concurrency)
     {
       wake_or_create_thread();
       continue;
     }
 
-    if (!m_task_queue.empty() && last_tasks_dequeued == m_tasks_dequeued &&
-        last_threads <= m_threads && m_active_threads == m_threads)
+
+    if (last_tasks_dequeued == m_tasks_dequeued &&
+        last_threads <= thread_cnt && m_active_threads.size() == thread_cnt)
     {
       // no progress made since last iteration. create new
       // thread
       add_thread();
     }
-    lk.unlock();
     last_tasks_dequeued= m_tasks_dequeued;
-    last_threads= m_threads;
+    last_threads= thread_cnt;
   }
+}
+
+/*
+  Heuristic used for thread creation throttling.
+  Returns interval in milliseconds between thread creation
+  (depending on number of threads already in the pool, and 
+  desired concurrency level)
+*/
+static int  throttling_interval_ms(size_t n_threads,size_t concurrency)
+{
+  if (n_threads < concurrency*4)
+    return 0;
+
+  if (n_threads < concurrency*8)
+    return 50;
+
+  if (n_threads < concurrency*16)
+    return 100;
+
+  return 200;
 }
 
 /* Create a new worker.*/
 bool thread_pool_generic::add_thread()
 {
-  if (m_threads >= m_max_threads)
+  size_t n_threads = thread_count();
+
+  if (n_threads >= m_max_threads)
     return false;
-  m_threads++;
-  m_active_threads++;
-  std::thread thread(&thread_pool_generic::worker_main, this);
+
+  if (n_threads >= m_min_threads)
+  {
+    auto now = std::chrono::system_clock::now();
+    if (now - m_last_thread_creation <
+      std::chrono::milliseconds(throttling_interval_ms(n_threads, m_concurrency)))
+    {
+      /* Throttle thread creation.*/
+      return false;
+    }
+  }
+
+  worker_data *thread_data = m_thread_data_cache.get();
+  m_active_threads.push_back(thread_data);
+  std::thread thread(&thread_pool_generic::worker_main,this, thread_data);
+  m_last_thread_creation = std::chrono::system_clock::now();
   thread.detach();
   return true;
 }
@@ -372,7 +450,7 @@ bool thread_pool_generic::wake(worker_wake_reason reason, const task *t)
     return false;
   auto var= m_standby_threads.back();
   m_standby_threads.pop_back();
-  m_active_threads++;
+  m_active_threads.push_back(var);
   assert(var->m_wake_reason == WAKE_REASON_NONE);
   var->m_wake_reason= reason;
   var->m_cv.notify_one();
@@ -403,30 +481,33 @@ void thread_pool_generic::timer_stop()
   m_timer_thread.join();
 }
 
-thread_pool_generic::thread_pool_generic(int min_threads, int max_threads)
-    : m_task_queue(10000),
+thread_pool_generic::thread_pool_generic(int min_threads, int max_threads):
+      m_thread_data_cache(max_threads),
+      m_task_queue(10000),
       m_standby_threads(),
+      m_active_threads(),
       m_mtx(),
       m_thread_timeout(std::chrono::milliseconds(60000)),
-      m_timer_interval(std::chrono::milliseconds(10)),
+      m_timer_interval(std::chrono::milliseconds(100)),
       m_cv_no_threads(),
       m_cv_timer(),
-      m_threads(),
-      m_active_threads(),
       m_tasks_dequeued(),
       m_wakeups(),
       m_spurious_wakeups(),
       m_concurrency(std::thread::hardware_concurrency()),
       m_in_shutdown(),
       m_timer_on(),
+      m_timestamp(),
+      m_long_tasks_count(),
+      m_last_thread_creation(),
       m_min_threads(min_threads),
       m_max_threads(max_threads)
 {
   if (min_threads != max_threads)
     timer_start();
-  if (max_threads < m_concurrency)
+  if (m_max_threads < m_concurrency)
     m_concurrency = m_max_threads;
-  if (min_threads > m_concurrency)
+  if (m_min_threads > m_concurrency)
     m_concurrency = min_threads;
   if (!m_concurrency)
     m_concurrency = 1;
@@ -461,7 +542,7 @@ void thread_pool_generic::submit_task(const task &task)
   if (m_in_shutdown)
     return;
   m_task_queue.push(task);
-  if (m_active_threads < m_concurrency)
+  if (m_active_threads.size() - m_long_tasks_count < m_concurrency)
     wake_or_create_thread();
 }
 
@@ -478,7 +559,7 @@ thread_pool_generic::~thread_pool_generic()
   {
   }
 
-  while (m_threads)
+  while (thread_count())
   {
     m_cv_no_threads.wait(lk);
   }

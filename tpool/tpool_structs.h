@@ -120,4 +120,115 @@ private:
   size_t m_tail;
 };
 
+/* Doubly linked list. Intrusive,
+   requires element to have m_next and m_prev pointers.
+*/
+template<typename T> class doubly_linked_list
+{
+public:
+  T* m_first;
+  T* m_last;
+  size_t m_count;
+  doubly_linked_list():m_first(),m_last(),m_count()
+  {}
+  void check()
+  {
+    assert(!m_first || !m_first->m_prev);
+    assert(!m_last || !m_last->m_next);
+    assert((!m_first && !m_last && m_count == 0)
+     || (m_first != 0 && m_last != 0 && m_count > 0));
+    T* current = m_first;
+    for(size_t i=1; i< m_count;i++)
+    {
+      current = current->m_next;
+    }
+    assert(current == m_last);
+    current = m_last;
+    for (size_t i = 1; i < m_count; i++)
+    {
+      current = current->m_prev;
+    }
+    assert(current == m_first);
+  }
+  T* front()
+  {
+    return m_first;
+  }
+  size_t size()
+  {
+    return m_count;
+  }
+  void push_back(T* ele)
+  {
+    ele->m_prev = m_last;
+    if (m_last)
+      m_last->m_next = ele;
+
+    ele->m_next = 0;
+    m_last = ele;
+    if (!m_first)
+      m_first = m_last;
+
+    m_count++;
+  }
+  T* back()
+  {
+    return m_last;
+  }
+  bool empty()
+  {
+    return m_count == 0;
+  }
+  void pop_back()
+  {
+    m_last = m_last->m_prev;
+    if (m_last)
+      m_last->m_next = 0;
+    else
+      m_first = 0;
+    m_count--;
+  }
+  bool contains(T* ele)
+  {
+    if (!ele)
+      return false;
+    T* current = m_first;
+    while(current)
+    {
+      if(current == ele)
+        return true;
+      current = current->m_next;
+    }
+    return false;
+  }
+
+  void erase(T* ele)
+  {
+    assert(contains(ele));
+
+    if (ele == m_first)
+    {
+      m_first = ele->m_next;
+      if (m_first)
+        m_first->m_prev = 0;
+      else
+        m_last = 0;
+    }
+    else if (ele == m_last)
+    {
+      assert(ele->m_prev);
+      m_last = ele->m_prev;
+      m_last->m_next = 0;
+    }
+    else
+    {
+      assert(ele->m_next);
+      assert(ele->m_prev);
+      ele->m_next->m_prev = ele->m_prev;
+      ele->m_prev->m_next = ele->m_next;
+    }
+    m_count--;
+  }
+};
+
 }
