@@ -52,16 +52,25 @@ public:
       m_cache[i]=&m_base[i];
   }
 
-  T* get()
+  T* get(bool blocking=true)
   {
     std::unique_lock<std::mutex> lk(m_mtx);
-    while(m_cache.empty())
-     m_cv.wait(lk);
+    if (blocking)
+    {
+      while(m_cache.empty())
+        m_cv.wait(lk);
+    }
+    else
+    {
+      if(m_cache.empty())
+        return nullptr;
+    }
     T* ret = m_cache.back();
     m_cache.pop_back();
     return ret;
   }
-  
+
+
   void put(T *ele)
   {
     std::unique_lock<std::mutex> lk(m_mtx);

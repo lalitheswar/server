@@ -29,7 +29,9 @@ Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA 02111 - 1301 USA*/
 #include <vector>
 #include "tpool.h"
 #include <assert.h>
-
+#include <my_global.h>
+#include <my_dbug.h>
+#include <stdlib.h>
 
 namespace tpool
 {
@@ -55,7 +57,7 @@ namespace tpool
   on submit(), a worker thread  can be woken, or created
   to execute tasks.
 
-  The timer thread watches if work items  are being dequeued, and if not, 
+  The timer thread watches if work items  are being dequeued, and if not,
   this can indicate potential deadlock.
   Thus the timer thread can also wake or create a thread, to ensure some progress.
 
@@ -69,47 +71,92 @@ namespace tpool
   - to minimize spurious wakeups, some items are not put into the queue. Instead
   submit() will pass the data directly to the thread it woke up.
 */
+
+/**
+ Worker wakeup flags.
+*/
+enum worker_wake_reason
+{
+  WAKE_REASON_NONE,
+  WAKE_REASON_TASK,
+  WAKE_REASON_SHUTDOWN
+};
+
+/* A per-worker  thread structure.*/
+struct MY_ALIGNED(CPU_LEVEL1_DCACHE_LINESIZE)  worker_data
+{
+  /** Condition variable to wakeup this worker.*/
+  std::condition_variable m_cv;
+
+  /** Reason why worker was woken. */
+  worker_wake_reason m_wake_reason;
+
+  /**
+    If worker wakes up with WAKE_REASON_TASK, this the task it needs to execute.
+  */
+  task m_task;
+
+  /** Struct is member of intrusive doubly linked list */
+  worker_data* m_prev;
+  worker_data* m_next;
+
+  /* Current state of the worker.*/
+  enum state
+  {
+    NONE = 0,
+    EXECUTING_TASK = 1,
+    LONG_TASK = 2
+  };
+
+  int m_state;
+
+  bool is_executing_task()
+  {
+    return m_state & EXECUTING_TASK;
+  }
+  bool is_long_task()
+  {
+    return m_state & LONG_TASK;
+  }
+  std::chrono::system_clock::time_point m_task_start_time;
+  bool m_in_cache;
+  worker_data() :
+    m_cv(),
+    m_wake_reason(WAKE_REASON_NONE),
+    m_task{ 0, 0 },
+    m_prev(),
+    m_next(),
+    m_state(NONE),
+    m_task_start_time(),
+    m_in_cache()
+  {}
+
+  /*Define custom new/delete because of overaligned structure. */
+  void* operator new(size_t size)
+  {
+#ifdef _WIN32
+    return _aligned_malloc(size, CPU_LEVEL1_DCACHE_LINESIZE);
+#else
+    void* ptr;
+    int ret = posix_memalign(&ptr, CPU_LEVEL1_DCACHE_LINESIZE, size);
+    return ret ? 0 : ptr;
+#endif
+  }
+  void operator delete(void* p)
+  {
+#ifdef _WIN32
+    _aligned_free(p);
+#else
+    free(p);
+#endif
+  }
+};
+
 class thread_pool_generic : public thread_pool
 {
-  /**
-   Worker wakeup flags.
-  */
-  enum worker_wake_reason
-  {
-    WAKE_REASON_NONE,
-    WAKE_REASON_TASK,
-    WAKE_REASON_SHUTDOWN
-  };
-  /* A per-worker  structure.*/
-  struct worker_data
-  {
-    /** Condition variable to wakeup this worker.*/
-    std::condition_variable m_cv;
-
-    /** Reason why worker was woken. */
-    worker_wake_reason m_wake_reason;
-
-    /** 
-      If worker wakes up with WAKE_REASON_TASK, this the task it needs to execute.
-    */
-    task m_task;
-    worker_data *m_prev;
-    worker_data *m_next;
-    bool m_is_executing_task;
-    bool m_is_long_task;
-    std::chrono::system_clock::time_point m_task_start_time;
-    worker_data() :
-      m_cv(),
-      m_wake_reason(WAKE_REASON_NONE),
-      m_task{ 0, 0 },
-      m_prev(),
-      m_next(),
-      m_is_executing_task(),
-      m_is_long_task(),
-      m_task_start_time()
-      {}
-  };
+  /** Cache for per-worker structures */
   cache<worker_data> m_thread_data_cache;
+
   /** The task queue */
   circular_queue<task> m_task_queue;
 
@@ -129,8 +176,6 @@ class thread_pool_generic : public thread_pool
   /** How often should timer wakeup.*/
   std::chrono::milliseconds m_timer_interval;
 
-  /** Condition variable, used in pool shutdown-*/
-  std::condition_variable m_cv_no_active_threads;
   /** Another condition variable, used in pool shutdown-*/
   std::condition_variable m_cv_no_threads;
 
@@ -155,9 +200,6 @@ class thread_pool_generic : public thread_pool
   */
   int m_spurious_wakeups;
 
-  /**
-  Number of long executing tasks
-  */
   /**  The desired concurrency.  This number of workers should be actively executing.*/
   unsigned int m_concurrency;
 
@@ -169,16 +211,21 @@ class thread_pool_generic : public thread_pool
     workers, timer is not started, and m_timer_on will be false.
   */
   bool m_timer_on;
-  /** Last time timer ran, used as very coarse clock. */
+
+  /** time point when timer last ran, used as a coarse clock. */
   std::chrono::system_clock::time_point m_timestamp;
+
   /** Number of long running tasks. The long running tasks are excluded when 
   adjusting concurrency */
   int m_long_tasks_count;
+
+  /** Last time thread was created*/
   std::chrono::system_clock::time_point m_last_thread_creation;
-  /** Minimumal number of threads in this pool.*/
+
+  /** Minimumum number of threads in this pool.*/
   unsigned int m_min_threads;
 
-  /** Maximal number of threads in this pool. */
+  /** Maximimum number of threads in this pool. */
   unsigned int m_max_threads;
 
   void worker_main(worker_data *thread_data);
@@ -232,13 +279,17 @@ bool thread_pool_generic::wait_for_tasks(std::unique_lock<std::mutex> &lk,
   for (;;)
   {
     thread_data->m_cv.wait_for(lk, m_thread_timeout);
+
     if (thread_data->m_wake_reason != WAKE_REASON_NONE)
     {
+      /* Woke up not due to timeout.*/
       return true;
     }
 
     if (thread_count() <= m_min_threads)
     {
+      /* Do not shutdown thread, maintain required minimum of worker
+        threads.*/
       continue;
     }
 
@@ -253,7 +304,7 @@ bool thread_pool_generic::wait_for_tasks(std::unique_lock<std::mutex> &lk,
   }
 }
 
-/** 
+/**
  Workers "get next task" routine.
 
  A task can be handed over to the current thread directly during submit().
@@ -266,12 +317,11 @@ bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
 {
   bool task_queue_was_full = false;
   std::unique_lock<std::mutex> lk(m_mtx);
-  thread_var->m_is_executing_task = false;
-  if (thread_var->m_is_long_task && m_long_tasks_count)
-  {
+ 
+  if (thread_var->is_long_task() && m_long_tasks_count)
     m_long_tasks_count--;
-  }
-  thread_var->m_is_long_task = false;
+
+  thread_var->m_state = worker_data::NONE;
 
   if (m_task_queue.empty())
   {
@@ -281,7 +331,7 @@ bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
     if (!wait_for_tasks(lk, thread_var))
       return false;
 
-    /* Task was handed over directly.*/
+    /* Task was handed over directly by signaling thread.*/
     if (thread_var->m_wake_reason == WAKE_REASON_TASK)
     {
       *t= thread_var->m_task;
@@ -308,7 +358,7 @@ bool thread_pool_generic::get_task(worker_data *thread_var, task *t)
     m_cv_queue_not_full.notify_all();
   }
 end:
-  thread_var->m_is_executing_task = true;
+  thread_var->m_state |= worker_data::EXECUTING_TASK;
   thread_var->m_task_start_time = m_timestamp;
   return true;
 }
@@ -343,7 +393,10 @@ void thread_pool_generic::worker_main(worker_data *thread_var)
     m_worker_destroy_callback();
 
   worker_end(thread_var);
-  m_thread_data_cache.put(thread_var);
+  if (thread_var->m_in_cache)
+    m_thread_data_cache.put(thread_var);
+  else
+    delete thread_var;
 }
 
 void thread_pool_generic::timer_main()
@@ -367,10 +420,11 @@ void thread_pool_generic::timer_main()
       thread_data;
       thread_data = thread_data->m_next)
     {
-      if (thread_data->m_is_executing_task &&
-        (thread_data->m_is_long_task || (m_timestamp - thread_data->m_task_start_time > LONG_TASK_DURATION)))
+      if (thread_data->is_executing_task() &&
+        (thread_data->is_long_task() 
+        || (m_timestamp - thread_data->m_task_start_time > LONG_TASK_DURATION)))
       {
-        thread_data->m_is_long_task = true;
+        thread_data->m_state |= worker_data::LONG_TASK;
         m_long_tasks_count++;
       }
     }
@@ -433,7 +487,16 @@ bool thread_pool_generic::add_thread()
     }
   }
 
-  worker_data *thread_data = m_thread_data_cache.get();
+  worker_data *thread_data = m_thread_data_cache.get(false);
+  if(thread_data)
+  {
+    thread_data->m_in_cache = true;
+  }
+  else
+  {
+    /* Cache was too small.*/
+    thread_data = new worker_data;
+  }
   m_active_threads.push_back(thread_data);
   std::thread thread(&thread_pool_generic::worker_main,this, thread_data);
   m_last_thread_creation = std::chrono::system_clock::now();

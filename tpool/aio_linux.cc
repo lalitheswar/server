@@ -119,7 +119,7 @@ public:
   }
 
   // Inherited via aio
-  virtual int submit_aio(const aiocb* aiocb) override
+  virtual int submit_io(const aiocb* aiocb) override
   {
     linux_iocb* cb = m_cache.get();
     memcpy(&cb->m_aiocb, aiocb, sizeof(*aiocb));

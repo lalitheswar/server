@@ -22,3 +22,5 @@ ADD_LIBRARY(tpool STATIC
   tpool_generic.cc
   ${EXTRA_SOURCES}
 )
+
+INCLUDE_DIRECTORIES(${PROJECT_SOURCE_DIR}/include)

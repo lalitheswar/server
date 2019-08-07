@@ -94,7 +94,7 @@ public:
     Submit asyncronous IO.
     On completion, cb->m_callback is executed.
   */
-  virtual int submit_aio(const aiocb *cb)= 0;
+  virtual int submit_io(const aiocb *cb)= 0;
   /** "Bind" file to AIO handler (used on Windows only) */
   virtual int bind(native_file_handle &fd)= 0;
   /** "Unind" file to AIO handler (used on Windows only) */
@@ -110,7 +110,7 @@ extern aio *create_simulated_aio(thread_pool *tp, int max_io);
 class thread_pool
 {
 protected:
-  /* AIO hnadler */
+  /* AIO handler */
   aio *m_aio;
   virtual aio* create_native_aio(int max_io) = 0;
 
@@ -139,7 +139,7 @@ public:
   }
   int bind(native_file_handle &fd) { return m_aio->bind(fd); }
   void unbind(const native_file_handle &fd) { m_aio->unbind(fd); }
-  int submit_io(const aiocb *cb) { return m_aio->submit_aio(cb); }
+  int submit_io(const aiocb *cb) { return m_aio->submit_io(cb); }
   virtual ~thread_pool() { delete m_aio; }
 };
 const int DEFAULT_MIN_POOL_THREADS= 1;

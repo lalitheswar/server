@@ -137,7 +137,7 @@ public:
     ((simulated_aio *) cb->m_internal)->m_cache.put(cb);
   }
 
-  virtual int submit_aio(const aiocb *aiocb) override
+  virtual int submit_io(const aiocb *aiocb) override
   {
     auto cb= m_cache.get();
     *cb= *aiocb;

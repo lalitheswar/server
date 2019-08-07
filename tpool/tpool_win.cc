@@ -89,7 +89,7 @@ class thread_pool_win : public thread_pool
     /**
      Submit async IO.
     */
-    virtual int submit_aio(const aiocb* aiocb) override
+    virtual int submit_io(const aiocb* aiocb) override
     {
       win_aio_cb* cb = m_cache.get();
       memset(cb, 0, sizeof(OVERLAPPED));

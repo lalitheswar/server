@@ -116,7 +116,7 @@ public:
     m_thread.join();
   }
 
-  virtual int submit_aio(const aiocb* aiocb) override
+  virtual int submit_io(const aiocb* aiocb) override
   {
     generic_win_aiocb* cb = m_cache.get();
     memset(cb, 0, sizeof(OVERLAPPED));
