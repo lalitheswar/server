@@ -1859,7 +1859,10 @@ SyncFileIO::execute(const IORequest& request)
 		ret = GetOverlappedResult(m_fh, &seek, &n_bytes, TRUE);
 	}
 
-	return(ret ? static_cast<ssize_t>(n_bytes) : -1);
+	if (!ret && (GetLastError() == ERROR_HANDLE_EOF))
+		return 0;
+
+	return ret ? static_cast<ssize_t>(n_bytes) : -1;
 }
 
 
@@ -3409,17 +3412,19 @@ os_file_read_page(
 	if (ulint(n_bytes) == n || (err != DB_SUCCESS && !exit_on_err)) {
 		return err;
 	}
-
-	ib::error() << "Tried to read " << n << " bytes at offset "
-		    << offset << ", but was only able to read " << n_bytes;
+	int os_err = IF_WIN((int)GetLastError(), errno);
 
 	if (!os_file_handle_error_cond_exit(
 		    NULL, "read", exit_on_err, false)) {
 		ib::fatal()
-			<< "Cannot read from file. OS error number "
-			<< errno << ".";
+			<< "Tried to read " << n << " bytes at offset "
+			<< offset << ", but was only able to read " << n_bytes
+			<< ".Cannot read from file. OS error number "
+			<< os_err << ".";
+	} else {
+		ib::error() << "Tried to read " << n << " bytes at offset "
+		<< offset << ", but was only able to read " << n_bytes;
 	}
-
 	if (err == DB_SUCCESS) {
 		err = DB_IO_ERROR;
 	}
