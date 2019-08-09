@@ -33,23 +33,46 @@ namespace tpool
 
   ´See MSDN docs for GetQueuedCompletionStatus() for description of this trick.
 */
-struct sync_io_event
+static DWORD fls_sync_io= FLS_OUT_OF_INDEXES;
+HANDLE win_get_syncio_event()
 {
-  HANDLE m_event;
-  sync_io_event()
-  {
-    m_event= CreateEvent(0, FALSE, FALSE, 0);
-    m_event= (HANDLE)(((uintptr_t) m_event) | 1);
-  }
-  ~sync_io_event()
-  {
-    m_event= (HANDLE)(((uintptr_t) m_event) & ~1);
-    CloseHandle(m_event);
-  }
-};
-static thread_local sync_io_event sync_event;
+  HANDLE h;
 
-static int pread(const native_file_handle &h, void *buf, size_t count,
+  h= (HANDLE) FlsGetValue(fls_sync_io);
+  if (h)
+  {
+    return h;
+  }
+  h= CreateEventA(NULL, FALSE, FALSE, NULL);
+  /* Set low-order bit to keeps I/O completion from being queued */
+  h= (HANDLE)((uintptr_t) h | 1);
+  FlsSetValue(fls_sync_io, h);
+  return h;
+}
+#include <WinIoCtl.h>
+static void __stdcall win_free_syncio_event(void *data)
+{
+  if (data)
+  {
+    CloseHandle((HANDLE) data);
+  }
+}
+
+struct WinIoInit
+{
+  WinIoInit()
+  {
+    fls_sync_io= FlsAlloc(win_free_syncio_event);
+    if(fls_sync_io == FLS_OUT_OF_INDEXES)
+	  abort();
+  }
+  ~WinIoInit() { FlsFree(fls_sync_io); }
+};
+
+static WinIoInit win_io_init;
+
+
+int pread(const native_file_handle &h, void *buf, size_t count,
                  unsigned long long offset)
 {
   OVERLAPPED ov{};
@@ -57,7 +80,7 @@ static int pread(const native_file_handle &h, void *buf, size_t count,
   uli.QuadPart= offset;
   ov.Offset= uli.LowPart;
   ov.OffsetHigh= uli.HighPart;
-  ov.hEvent= sync_event.m_event;
+  ov.hEvent= win_get_syncio_event();
 
   if (ReadFile(h, buf, (DWORD) count, 0, &ov) ||
       (GetLastError() == ERROR_IO_PENDING))
@@ -70,7 +93,7 @@ static int pread(const native_file_handle &h, void *buf, size_t count,
   return -1;
 }
 
-static int pwrite(const native_file_handle &h, void *buf, size_t count,
+int pwrite(const native_file_handle &h, void *buf, size_t count,
                   unsigned long long offset)
 {
   OVERLAPPED ov{};
@@ -78,7 +101,7 @@ static int pwrite(const native_file_handle &h, void *buf, size_t count,
   uli.QuadPart= offset;
   ov.Offset= uli.LowPart;
   ov.OffsetHigh= uli.HighPart;
-  ov.hEvent= sync_event.m_event;
+  ov.hEvent= win_get_syncio_event();
 
   if (WriteFile(h, buf, (DWORD) count, 0, &ov) ||
       (GetLastError() == ERROR_IO_PENDING))

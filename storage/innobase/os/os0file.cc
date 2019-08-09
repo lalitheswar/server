@@ -197,7 +197,6 @@ static void os_file_handle_rename_error(const char* name, const char* new_name)
 
 
 #ifdef _WIN32
-static HANDLE win_get_syncio_event();
 
 /**
  Wrapper around Windows DeviceIoControl() function.
@@ -221,7 +220,7 @@ os_win32_device_io_control(
 )
 {
 	OVERLAPPED overlapped = { 0 };
-	overlapped.hEvent = win_get_syncio_event();
+	overlapped.hEvent = tpool::win_get_syncio_event();
 	BOOL result = DeviceIoControl(handle, code, inbuf, inbuf_size, outbuf,
 		outbuf_size,  NULL, &overlapped);
 
@@ -696,7 +695,7 @@ os_file_create_subdirs_if_needed(
 	return(success ? DB_SUCCESS : DB_ERROR);
 }
 
-#ifndef _WIN32
+
 
 /** Do the read/write
 @param[in]	request	The IO context and type
@@ -707,14 +706,24 @@ SyncFileIO::execute(const IORequest& request)
 	ssize_t	n_bytes;
 
 	if (request.is_read()) {
+#ifdef _WIN32
+		n_bytes = tpool::pread(m_fh, m_buf, m_n, m_offset);
+#else
 		n_bytes = pread(m_fh, m_buf, m_n, m_offset);
+#endif
 	} else {
 		ut_ad(request.is_write());
+#ifdef _WIN32
+		n_bytes = tpool::pwrite(m_fh, m_buf, m_n, m_offset);
+#else
 		n_bytes = pwrite(m_fh, m_buf, m_n, m_offset);
+#endif
 	}
 
 	return(n_bytes);
 }
+
+#ifndef _WIN32
 /** Free storage space associated with a section of the file.
 @param[in]	fh		Open file handle
 @param[in]	off		Starting offset (SEEK_SET)
@@ -1787,102 +1796,6 @@ os_file_set_eof(
 
 #include <WinIoCtl.h>
 
-/*
-Windows : Handling synchronous IO on files opened asynchronously.
-
-If file is opened for asynchronous IO (FILE_FLAG_OVERLAPPED) and also bound to
-a completion port, then every IO on this file would normally be enqueued to the
-completion port. Sometimes however we would like to do a synchronous IO. This is
-possible if we initialitze have overlapped.hEvent with a valid event and set its
-lowest order bit to 1 (see MSDN ReadFile and WriteFile description for more info)
-
-We'll create this special event once for each thread and store in thread local
-storage.
-*/
-
-
-static void __stdcall win_free_syncio_event(void *data) {
-	if (data) {
-		CloseHandle((HANDLE)data);
-	}
-}
-
-
-/*
-Retrieve per-thread event for doing synchronous io on asyncronously opened files
-*/
-static HANDLE win_get_syncio_event()
-{
-	HANDLE h;
-
-	h = (HANDLE)FlsGetValue(fls_sync_io);
-	if (h) {
-		return h;
-	}
-	h = CreateEventA(NULL, FALSE, FALSE, NULL);
-	ut_a(h);
-	/* Set low-order bit to keeps I/O completion from being queued */
-	h = (HANDLE)((uintptr_t)h | 1);
-	FlsSetValue(fls_sync_io, h);
-	return h;
-}
-
-
-/** Do the read/write
-@param[in]	request	The IO context and type
-@return the number of bytes read/written or negative value on error */
-ssize_t
-SyncFileIO::execute(const IORequest& request)
-{
-	OVERLAPPED	seek;
-
-	memset(&seek, 0x0, sizeof(seek));
-
-	seek.hEvent = win_get_syncio_event();
-	seek.Offset = (DWORD) m_offset & 0xFFFFFFFF;
-	seek.OffsetHigh = (DWORD) (m_offset >> 32);
-
-	BOOL	ret;
-	DWORD	n_bytes;
-
-	if (request.is_read()) {
-		ret = ReadFile(m_fh, m_buf,
-			static_cast<DWORD>(m_n), NULL, &seek);
-
-	} else {
-		ut_ad(request.is_write());
-		ret = WriteFile(m_fh, m_buf,
-			static_cast<DWORD>(m_n), NULL, &seek);
-	}
-	if (ret || (GetLastError() == ERROR_IO_PENDING)) {
-		/* Wait for async io to complete */
-		ret = GetOverlappedResult(m_fh, &seek, &n_bytes, TRUE);
-	}
-
-	if (!ret && (GetLastError() == ERROR_HANDLE_EOF))
-		return 0;
-
-	return ret ? static_cast<ssize_t>(n_bytes) : -1;
-}
-
-
-
-/* Startup/shutdown */
-
-struct WinIoInit
-{
-	WinIoInit() {
-		fls_sync_io = FlsAlloc(win_free_syncio_event);
-		ut_a(fls_sync_io != FLS_OUT_OF_INDEXES);
-	}
-
-	~WinIoInit() {
-		FlsFree(fls_sync_io);
-	}
-};
-
-/* Ensures proper initialization and shutdown */
-static WinIoInit win_io_init;
 
 
 /** Free storage space associated with a section of the file.
