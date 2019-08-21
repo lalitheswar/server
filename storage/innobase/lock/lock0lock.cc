@@ -5112,12 +5112,10 @@ lock_rec_block_validate(
 		dberr_t err = DB_SUCCESS;
 		mtr_start(&mtr);
 
-		block = buf_page_get_gen(
-			page_id_t(space_id, page_no),
-			space->zip_size(),
-			RW_X_LATCH, NULL,
-			BUF_GET_POSSIBLY_FREED,
-			__FILE__, __LINE__, &mtr, &err);
+		block = buf_index_page_get(NULL, page_id_t(space_id, page_no),
+					   space->zip_size(), RW_X_LATCH, NULL,
+					   BUF_GET_POSSIBLY_FREED,
+					   __FILE__, __LINE__, &mtr, &err);
 
 		if (err != DB_SUCCESS) {
 			ib::error() << "Lock rec block validate failed for tablespace "

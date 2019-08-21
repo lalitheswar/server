@@ -1253,10 +1253,9 @@ static bool fil_crypt_start_encrypting_space(fil_space_t* space)
 
 		/* 2 - get page 0 */
 		dberr_t err = DB_SUCCESS;
-		buf_block_t* block = buf_page_get_gen(
-			page_id_t(space->id, 0), space->zip_size(),
-			RW_X_LATCH, NULL, BUF_GET,
-			__FILE__, __LINE__,
+		buf_block_t* block = buf_index_page_get(
+			NULL, page_id_t(space->id, 0), space->zip_size(),
+			RW_X_LATCH, NULL, BUF_GET, __FILE__, __LINE__,
 			&mtr, &err);
 
 
@@ -1850,10 +1849,10 @@ fil_crypt_get_page_throttle_func(
 	}
 
 	dberr_t err = DB_SUCCESS;
-	buf_block_t* block = buf_page_get_gen(page_id, zip_size, RW_X_LATCH,
-					      NULL,
-					      BUF_PEEK_IF_IN_POOL, file, line,
-					      mtr, &err);
+	buf_block_t* block = buf_index_page_get(NULL, page_id, zip_size,
+						RW_X_LATCH, NULL,
+						BUF_PEEK_IF_IN_POOL, file, line,
+						mtr, &err);
 	if (block != NULL) {
 		/* page was in buffer pool */
 		state->crypt_stat.pages_read_from_cache++;
@@ -1867,10 +1866,9 @@ fil_crypt_get_page_throttle_func(
 	state->crypt_stat.pages_read_from_disk++;
 
 	const ulonglong start = my_interval_timer();
-	block = buf_page_get_gen(page_id, zip_size,
-				 RW_X_LATCH,
-				 NULL, BUF_GET_POSSIBLY_FREED,
-				file, line, mtr, &err);
+	block = buf_index_page_get(NULL, page_id, zip_size, RW_X_LATCH,
+				   NULL, BUF_GET_POSSIBLY_FREED, file, line,
+				   mtr, &err);
 	const ulonglong end = my_interval_timer();
 
 	state->cnt_waited++;
@@ -2234,8 +2232,8 @@ fil_crypt_flush_space(
 
 	dberr_t err;
 
-	if (buf_block_t* block = buf_page_get_gen(
-		    page_id_t(space->id, 0), space->zip_size(),
+	if (buf_block_t* block = buf_index_page_get(
+		    NULL, page_id_t(space->id, 0), space->zip_size(),
 		    RW_X_LATCH, NULL, BUF_GET,
 		    __FILE__, __LINE__, &mtr, &err)) {
 		mtr.set_named_space(space);

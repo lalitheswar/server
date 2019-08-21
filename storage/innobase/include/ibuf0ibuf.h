@@ -317,6 +317,17 @@ ibuf_insert(
 	ulint			zip_size,
 	que_thr_t*		thr);
 
+/* Check whether the change buffer changes exists for the particular page id.
+@param[in,out]	block		if page has been read from disk,
+				pointer to the page x-latched, else NULL
+@param[in]	page_id		page id of the index page
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
+@return true if change buffer exists. */
+bool ibuf_page_exists(
+	buf_block_t*	block,
+	const page_id_t	page_id,
+	ulint		zip_size);
+
 /** When an index page is read from a disk to the buffer pool, this function
 applies any buffered operations to the page and deletes the entries from the
 insert buffer. If the page is not read, but created in the buffer pool, this
@@ -353,9 +364,7 @@ based on the current size of the change buffer.
 @return a lower limit for the combined size in bytes of entries which
 will be merged from ibuf trees to the pages read, 0 if ibuf is
 empty */
-ulint
-ibuf_merge_in_background(
-	bool	full);
+ulint ibuf_merge_all();
 
 /** Contracts insert buffer trees by reading pages referring to space_id
 to the buffer pool.

@@ -2016,9 +2016,9 @@ dberr_t PageConverter::operator()(buf_block_t* block) UNIV_NOTHROW
 	/* If we already had an old page with matching number
 	in the buffer pool, evict it now, because
 	we no longer evict the pages on DISCARD TABLESPACE. */
-	buf_page_get_gen(block->page.id, get_zip_size(),
-			 RW_NO_LATCH, NULL, BUF_EVICT_IF_IN_POOL,
-			 __FILE__, __LINE__, NULL, NULL);
+	buf_index_page_get(NULL, block->page.id, get_zip_size(),
+			   RW_NO_LATCH, NULL, BUF_EVICT_IF_IN_POOL,
+			   __FILE__, __LINE__, NULL, NULL);
 
 	ulint		page_type;
 

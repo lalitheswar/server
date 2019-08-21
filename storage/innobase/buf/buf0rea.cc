@@ -91,6 +91,108 @@ buf_read_page_handle_error(
 	buf_pool_mutex_exit(buf_pool);
 }
 
+/** Merge the change buffer changes for the buffered pages.
+@param[in]	page_id		page id to be merged
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED format. */
+static
+void buf_merge_buffered_page(
+	const page_id_t	page_id,
+	ulint		zip_size)
+{
+	buf_pool_t*	buf_pool = buf_pool_get(page_id);
+	buf_block_t*	block;
+	rw_lock_t*	hash_lock;
+
+	block = buf_block_hash_get_x_locked(buf_pool, page_id, &hash_lock);
+
+	if (block == NULL) {
+		return;
+	}
+
+	buf_page_mutex_enter(block);
+
+	rw_lock_x_unlock(hash_lock);
+
+	rw_lock_x_lock(&block->lock);
+
+	buf_page_mutex_exit(block);
+
+	if (block->page.is_ibuf_exists()) {
+		ibuf_merge_or_delete_for_page(
+			block, page_id, zip_size, true);
+		block->page.unset_ibuf_exists();
+	}
+
+	rw_lock_x_unlock(&block->lock);
+}
+
+/** Function for change buffer merges to happen for the pages. It is a
+replica of buf_page_read_low. REMOVE it once everything is in right way. */
+static
+void buf_read_and_merge_ibuf_page(
+	dberr_t*	err,
+	bool		sync,
+	ulint		type,
+	ulint		mode,
+	const page_id_t	page_id,
+	ulint		zip_size)
+{
+	*err = DB_SUCCESS;
+	buf_page_t*	bpage = buf_page_init_for_read(
+			err, mode, page_id, zip_size, true);
+
+	if (bpage == NULL) {
+		return buf_merge_buffered_page(page_id, zip_size);
+	}
+
+	DBUG_LOG("ib_buf",
+		 "read page " << page_id << " zip_size=" << zip_size
+		 << ',' << (sync ? "sync" : "async"));
+
+	ut_ad(buf_page_in_file(bpage));
+
+	if (sync) {
+		thd_wait_begin(NULL, THD_WAIT_DISKIO);
+	}
+
+	void*	dst;
+
+	if (zip_size) {
+		dst = bpage->zip.data;
+	} else {
+		ut_a(buf_page_get_state(bpage) == BUF_BLOCK_FILE_PAGE);
+
+		dst = ((buf_block_t*) bpage)->frame;
+	}
+
+	IORequest	request(type | IORequest::READ);
+
+	*err = fil_io(
+		request, sync, page_id, zip_size, 0,
+		zip_size ? zip_size : srv_page_size,
+		dst, bpage, true);
+
+	if (sync) {
+		thd_wait_end(NULL);
+	}
+
+	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
+		if (IORequest::ignore_missing(type)
+		    || *err == DB_TABLESPACE_DELETED) {
+			buf_read_page_handle_error(bpage);
+			return;
+		}
+
+		ut_error;
+	}
+
+	if (sync) {
+		/* The i/o is already completed when we arrive from
+		fil_read */
+		*err = buf_page_io_complete(bpage, false, false, true);
+	}
+}
+
 /** Low-level function which reads a page asynchronously from a file to the
 buffer buf_pool if it is not already there, in which case does nothing.
 Sets the io_fix flag and sets an exclusive lock on the buffer frame. The
@@ -806,11 +908,9 @@ tablespace_deleted:
 
 		dberr_t	err;
 
-		buf_read_page_low(&err,
-				  sync && (i + 1 == n_stored),
-				  0,
-				  BUF_READ_ANY_PAGE, page_id, zip_size,
-				  true, true /* ignore_missing_space */);
+		buf_read_and_merge_ibuf_page(
+			&err, sync && (i + 1 == n_stored),
+			0, BUF_READ_ANY_PAGE, page_id, zip_size);
 
 		switch(err) {
 		case DB_SUCCESS:

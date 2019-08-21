@@ -4255,8 +4255,55 @@ buf_wait_for_read(
 	}
 }
 
-/** This is the general function used to get access to a database page.
-@param[in]	page_id		page id
+/** Lock the page with the give latch in mini-transaction
+@param[in]	block		Pointer to the block
+@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	file		file name
+@param[in]	line		line where it is called
+@param[in]	mtr		mini-transation */
+static
+void buf_page_mtr_lock(
+	buf_block_t*	block,
+	ulint		rw_latch,
+	const char*	file,
+	unsigned	line,
+	mtr_t*		mtr)
+{
+	mtr_memo_type_t	fix_type;
+
+	switch (rw_latch) {
+	case RW_NO_LATCH:
+
+		fix_type = MTR_MEMO_BUF_FIX;
+		break;
+
+	case RW_S_LATCH:
+		rw_lock_s_lock_inline(&block->lock, 0, file, line);
+
+		fix_type = MTR_MEMO_PAGE_S_FIX;
+		break;
+
+	case RW_SX_LATCH:
+		rw_lock_sx_lock_inline(&block->lock, 0, file, line);
+
+		fix_type = MTR_MEMO_PAGE_SX_FIX;
+		break;
+
+	default:
+		ut_ad(rw_latch == RW_X_LATCH);
+		rw_lock_x_lock_inline(&block->lock, 0, file, line);
+
+		fix_type = MTR_MEMO_PAGE_X_FIX;
+		break;
+	}
+
+	mtr_memo_push(mtr, block, fix_type);
+}
+
+/** This is the general function used to get access to database page and
+does the merging of change buffer changes if it exists for the given page id.
+@param[in]	index		index of the page to be fetched
+@param[in]	page_id		page_id
 @param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
 @param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
 @param[in]	guess		guessed block or NULL
@@ -4268,6 +4315,64 @@ BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[out]	err		DB_SUCCESS or error code
 @return pointer to the block or NULL */
 buf_block_t*
+buf_index_page_get(
+       const dict_index_t*     index,
+       const page_id_t         page_id,
+       ulint                   zip_size,
+       ulint                   rw_latch,
+       buf_block_t*            guess,
+       ulint                   mode,
+       const char*             file,
+       unsigned                line,
+       mtr_t*                  mtr,
+       dberr_t*                err)
+{
+	bool sec_index = (index != NULL && !dict_index_is_clust(index));
+
+	if (sec_index) {
+		buf_block_t* block = buf_page_get_gen(
+				page_id, zip_size, rw_latch, guess,
+				mode, file, line, mtr, err, sec_index);
+
+		if (!block) {
+			return NULL;
+		}
+
+		rw_lock_x_lock(&block->lock);
+
+		if (block->page.is_ibuf_exists()) {
+
+			/* Merge the page from change buffer. */
+			ibuf_merge_or_delete_for_page(
+				block, block->page.id, zip_size, true);
+			block->page.unset_ibuf_exists();
+		}
+
+		rw_lock_x_unlock(&block->lock);
+
+		buf_page_mtr_lock(block, rw_latch, file, line, mtr);
+
+		return block;
+	}
+
+	return buf_page_get_gen(page_id, zip_size, rw_latch, guess,
+				mode, file, line, mtr, err);
+}
+
+/** This is the general function used to get access to a database page.
+@param[in]	page_id		page id
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
+@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	guess		guessed block or NULL
+@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
+BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
+@param[in]	file		file name
+@param[in]	line		line where called
+@param[in]	mtr		mini-transaction
+@param[out]	err		DB_SUCCESS or error code
+@param[in]	sec_index	page of secondary index
+@return pointer to the block or NULL */
+buf_block_t*
 buf_page_get_gen(
 	const page_id_t		page_id,
 	ulint			zip_size,
@@ -4277,7 +4382,8 @@ buf_page_get_gen(
 	const char*		file,
 	unsigned		line,
 	mtr_t*			mtr,
-	dberr_t*		err)
+	dberr_t*		err,
+	bool			sec_index)
 {
 	buf_block_t*	block;
 	unsigned	access_time;
@@ -4508,11 +4614,11 @@ loop:
 
 	if (fsp_is_system_temporary(page_id.space())) {
 		/* For temporary tablespace, the mutex is being used
-		for synchronization between user thread and flush
-		thread, instead of block->lock. See buf_flush_page()
-		for the flush thread counterpart. */
+		for synchorization between user thread and flush thread,
+		instead of block->lock. See buf_flush_page() for the flush
+		thread counterpart. */
 		BPageMutex*	fix_mutex = buf_page_get_mutex(
-			&fix_block->page);
+						&fix_block->page);
 		mutex_enter(fix_mutex);
 		fix_block->fix();
 		mutex_exit(fix_mutex);
@@ -4731,9 +4837,9 @@ evict_from_pool:
 			}
 		}
 
-		if (!access_time && !recv_no_ibuf_operations) {
-			ibuf_merge_or_delete_for_page(
-				block, block->page.id, zip_size, true);
+		if (!access_time && !recv_no_ibuf_operations
+		    && ibuf_page_exists(block, block->page.id, zip_size)) {
+			block->page.set_ibuf_exists();
 		}
 
 		buf_pool_mutex_enter(buf_pool);
@@ -4914,35 +5020,11 @@ evict_from_pool:
 		return NULL;
 	}
 
-	mtr_memo_type_t	fix_type;
-
-	switch (rw_latch) {
-	case RW_NO_LATCH:
-
-		fix_type = MTR_MEMO_BUF_FIX;
-		break;
-
-	case RW_S_LATCH:
-		rw_lock_s_lock_inline(&fix_block->lock, 0, file, line);
-
-		fix_type = MTR_MEMO_PAGE_S_FIX;
-		break;
-
-	case RW_SX_LATCH:
-		rw_lock_sx_lock_inline(&fix_block->lock, 0, file, line);
-
-		fix_type = MTR_MEMO_PAGE_SX_FIX;
-		break;
-
-	default:
-		ut_ad(rw_latch == RW_X_LATCH);
-		rw_lock_x_lock_inline(&fix_block->lock, 0, file, line);
-
-		fix_type = MTR_MEMO_PAGE_X_FIX;
-		break;
+	if (sec_index) {
+		return fix_block;
 	}
 
-	mtr_memo_push(mtr, fix_block, fix_type);
+	buf_page_mtr_lock(fix_block, rw_latch, file, line, mtr);
 
 	if (mode != BUF_PEEK_IF_IN_POOL && !access_time) {
 		/* In the case of a first access, try to apply linear
@@ -5268,6 +5350,7 @@ buf_page_init_low(
 	bpage->encrypted = false;
 	bpage->real_size = 0;
 	bpage->slot = NULL;
+	bpage->ibuf_exists = false;
 
 	HASH_INVALIDATE(bpage, hash);
 
@@ -6029,9 +6112,10 @@ static dberr_t buf_page_check_corrupt(buf_page_t* bpage, fil_space_t* space)
 }
 
 /** Complete a read or write request of a file page to or from the buffer pool.
-@param[in,out]	bpage	page to complete
-@param[in]	dblwr	whether the doublewrite buffer was used (on write)
-@param[in]	evict	whether or not to evict the page from LRU list
+@param[in,out]	bpage		page to complete
+@param[in]	dblwr		whether the doublewrite buffer was used (on write)
+@param[in]	evict		whether or not to evict the page from LRU list
+@param[in]	merge_ibuf	called from change buffer merge function
 @return whether the operation succeeded
 @retval	DB_SUCCESS		always when writing, or if a read page was OK
 @retval	DB_TABLESPACE_DELETED	if the tablespace does not exist
@@ -6041,7 +6125,7 @@ static dberr_t buf_page_check_corrupt(buf_page_t* bpage, fil_space_t* space)
 				not match */
 UNIV_INTERN
 dberr_t
-buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict)
+buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict, bool merge_ibuf)
 {
 	enum buf_io_fix	io_type;
 	buf_pool_t*	buf_pool = buf_pool_from_bpage(bpage);
@@ -6228,11 +6312,15 @@ database_corrupted:
 					<< " is not found or"
 					" used encryption algorithm or method does not match."
 					" Can't continue opening the table.";
-			} else {
-
+			} else if (merge_ibuf) {
 				ibuf_merge_or_delete_for_page(
 					(buf_block_t*) bpage, bpage->id,
 					bpage->zip_size(), true);
+			} else {
+
+				bpage->ibuf_exists = ibuf_page_exists(
+					(buf_block_t*) bpage, bpage->id,
+					bpage->zip_size());
 			}
 
 		}

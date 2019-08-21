@@ -1130,8 +1130,8 @@ re_scan:
 			ulint		page_no = page_get_page_no(
 				btr_pcur_get_page(pcur));
 
-			cur_block = buf_page_get_gen(
-				page_id_t(index->table->space_id, page_no),
+			cur_block = buf_index_page_get(
+				index, page_id_t(index->table->space_id, page_no),
 				index->table->space->zip_size(),
 				RW_X_LATCH, NULL, BUF_GET,
 				__FILE__, __LINE__, mtr, &err);
@@ -3311,7 +3311,8 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 			/* FIXME: Why is this block not the
 			same as btr_pcur_get_block(prebuilt->pcur),
 			and is it not unsafe to use RW_NO_LATCH here? */
-			buf_block_t*	block = buf_page_get_gen(
+			buf_block_t*	block = buf_index_page_get(
+				sec_index,
 				btr_pcur_get_block(prebuilt->pcur)->page.id,
 				btr_pcur_get_block(prebuilt->pcur)->zip_size(),
 				RW_NO_LATCH, NULL, BUF_GET,

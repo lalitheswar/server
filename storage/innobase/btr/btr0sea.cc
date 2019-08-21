@@ -1287,9 +1287,9 @@ void btr_search_drop_page_hash_when_freed(const page_id_t page_id)
 	are possibly holding, we cannot s-latch the page, but must
 	(recursively) x-latch it, even though we are only reading. */
 
-	block = buf_page_get_gen(page_id, 0, RW_X_LATCH, NULL,
-				 BUF_PEEK_IF_IN_POOL, __FILE__, __LINE__,
-				 &mtr, &err);
+	block = buf_index_page_get(NULL, page_id, 0, RW_X_LATCH, NULL,
+				   BUF_PEEK_IF_IN_POOL, __FILE__, __LINE__,
+				   &mtr, &err);
 
 	if (block) {
 

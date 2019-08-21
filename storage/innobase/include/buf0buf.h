@@ -357,7 +357,9 @@ NOTE! The following macros should be used instead of buf_page_get_gen,
 to improve debugging. Only values RW_S_LATCH and RW_X_LATCH are allowed
 in LA! */
 #define buf_page_get(ID, SIZE, LA, MTR)					\
-	buf_page_get_gen(ID, SIZE, LA, NULL, BUF_GET, __FILE__, __LINE__, MTR, NULL)
+	buf_index_page_get(NULL, ID, SIZE, LA, NULL, BUF_GET, __FILE__, \
+			   __LINE__, MTR, NULL)
+
 /**************************************************************//**
 Use these macros to bufferfix a page with no latching. Remember not to
 read the contents of the page unless you know it is safe. Do not modify
@@ -365,8 +367,8 @@ the contents of the page! We have separated this case, because it is
 error-prone programming not to set a latch, and it should be used
 with care. */
 #define buf_page_get_with_no_latch(ID, SIZE, MTR)	\
-	buf_page_get_gen(ID, SIZE, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH, \
-			 __FILE__, __LINE__, MTR, NULL)
+	buf_index_page_get(NULL, ID, SIZE, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH, \
+			   __FILE__, __LINE__, MTR, NULL)
 /********************************************************************//**
 This is the general function used to get optimistic access to a database
 page.
@@ -441,9 +443,38 @@ BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in]	line		line where called
 @param[in]	mtr		mini-transaction
 @param[out]	err		DB_SUCCESS or error code
+@param[in]	sec_index	Page of secondary index
 @return pointer to the block or NULL */
 buf_block_t*
 buf_page_get_gen(
+	const page_id_t		page_id,
+	ulint			zip_size,
+	ulint			rw_latch,
+	buf_block_t*		guess,
+	ulint			mode,
+	const char*		file,
+	unsigned		line,
+	mtr_t*			mtr,
+	dberr_t*		err,
+	bool			sec_index = false);
+
+/** This is the general function used to get access to database page and
+does the merging of change buffer changes if it exists for the given page id.
+@param[in]	index		index of the page to be fetched
+@param[in]	page_id		page_id
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
+@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	guess		guessed block or NULL
+@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
+BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
+@param[in]	file		file name
+@param[in]	line		line where called
+@param[in]	mtr		mini-transaction
+@param[out]	err		DB_SUCCESS or error code
+@return pointer to the block or NULL */
+buf_block_t*
+buf_index_page_get(
+	const dict_index_t*	index,
 	const page_id_t		page_id,
 	ulint			zip_size,
 	ulint			rw_latch,
@@ -1167,6 +1198,7 @@ buf_page_init_for_read(
 @param[in,out]	bpage	page to complete
 @param[in]	dblwr	whether the doublewrite buffer was used (on write)
 @param[in]	evict	whether or not to evict the page from LRU list
+@param[in]	merge_ibuf	called from change buffer merge function
 @return whether the operation succeeded
 @retval	DB_SUCCESS		always when writing, or if a read page was OK
 @retval	DB_PAGE_CORRUPTED	if the checksum fails on a page read
@@ -1175,7 +1207,11 @@ buf_page_init_for_read(
 				not match */
 UNIV_INTERN
 dberr_t
-buf_page_io_complete(buf_page_t* bpage, bool dblwr = false, bool evict = false)
+buf_page_io_complete(
+	buf_page_t*	bpage,
+	bool		dblwr = false,
+	bool		evict = false,
+	bool		merge_ibuf = false)
 	MY_ATTRIBUTE((nonnull));
 
 /********************************************************************//**
@@ -1621,6 +1657,8 @@ public:
 					protected by buf_pool->zip_mutex
 					or buf_block_t::mutex. */
 # endif /* UNIV_DEBUG */
+	/** Change buffer entries for the page exists. */
+	bool		ibuf_exists;
 
   void fix() { buf_fix_count++; }
   uint32_t unfix()
@@ -1641,6 +1679,22 @@ public:
   ulint zip_size() const
   {
     return zip.ssize ? (UNIV_ZIP_SIZE_MIN >> 1) << zip.ssize : 0;
+  }
+
+  /** Getter & Setter for ibuf_exists variable. */
+  bool is_ibuf_exists()
+  {
+    return ibuf_exists;
+  }
+
+  void set_ibuf_exists()
+  {
+     ibuf_exists = true;
+  }
+
+  void unset_ibuf_exists()
+  {
+     ibuf_exists = false;
   }
 };
 

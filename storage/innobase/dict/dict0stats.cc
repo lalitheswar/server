@@ -1514,9 +1514,9 @@ dict_stats_analyze_index_below_cur(
 
 		dberr_t err = DB_SUCCESS;
 
-		block = buf_page_get_gen(page_id, zip_size, RW_S_LATCH,
-					 NULL /* no guessed block */,
-					 BUF_GET, __FILE__, __LINE__, &mtr, &err);
+		block = buf_index_page_get(index, page_id, zip_size,
+					   RW_S_LATCH, NULL, BUF_GET,
+					   __FILE__, __LINE__, &mtr, &err);
 
 		page = buf_block_get_frame(block);
 

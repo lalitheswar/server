@@ -702,9 +702,10 @@ ibuf_bitmap_get_map_page_func(
 	buf_block_t*	block = NULL;
 	dberr_t		err = DB_SUCCESS;
 
-	block = buf_page_get_gen(ibuf_bitmap_page_no_calc(page_id, zip_size),
-				 zip_size, RW_X_LATCH, NULL, BUF_GET,
-				 file, line, mtr, &err);
+	block = buf_index_page_get(
+			NULL, ibuf_bitmap_page_no_calc(page_id, zip_size),
+			zip_size, RW_X_LATCH, NULL, BUF_GET, file, line, mtr,
+			&err);
 
 	if (err != DB_SUCCESS) {
 		return NULL;
@@ -1053,8 +1054,8 @@ ibuf_page_low(
 		while the page is linked to the insert buffer b-tree. */
 		dberr_t err = DB_SUCCESS;
 
-		buf_block_t* block = buf_page_get_gen(
-			ibuf_bitmap_page_no_calc(page_id, zip_size),
+		buf_block_t* block = buf_index_page_get(
+			NULL, ibuf_bitmap_page_no_calc(page_id, zip_size),
 			zip_size, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH,
 			file, line, &local_mtr, &err);
 
@@ -2564,8 +2565,7 @@ based on the current size of the change buffer.
 will be merged from ibuf trees to the pages read, 0 if ibuf is
 empty */
 ulint
-ibuf_merge_in_background(
-	bool	full)
+ibuf_merge_all()
 {
 	ulint	sum_bytes	= 0;
 	ulint	sum_pages	= 0;
@@ -2578,26 +2578,7 @@ ibuf_merge_in_background(
 	}
 #endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 
-	if (full) {
-		/* Caller has requested a full batch */
-		n_pages = PCT_IO(100);
-	} else {
-		/* By default we do a batch of 5% of the io_capacity */
-		n_pages = PCT_IO(5);
-
-		mutex_enter(&ibuf_mutex);
-
-		/* If the ibuf.size is more than half the max_size
-		then we make more agreesive contraction.
-		+1 is to avoid division by zero. */
-		if (ibuf.size > ibuf.max_size / 2) {
-			ulint diff = ibuf.size - ibuf.max_size / 2;
-			n_pages += PCT_IO((diff * 100)
-					   / (ibuf.max_size + 1));
-		}
-
-		mutex_exit(&ibuf_mutex);
-	}
+	n_pages = PCT_IO(100);
 
 #if defined UNIV_DEBUG || defined UNIV_IBUF_DEBUG
 	if (ibuf_debug) {
@@ -4252,6 +4233,63 @@ func_exit:
 	return(TRUE);
 }
 
+/* Check whether the change buffer changes exists for the particular page id.
+@param[in,out]	block		if page has been read from disk,
+				pointer to the page x-latched, else NULL
+@param[in]	page_id		page id of the index page
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size or 0
+@return true if change buffer exists. */
+bool ibuf_page_exists(
+	buf_block_t*	block,
+	const page_id_t	page_id,
+	ulint		zip_size)
+{
+	mtr_t	mtr;
+
+	ut_ad(block == NULL || page_id == block->page.id);
+	ut_ad(block == NULL || buf_block_get_io_fix(block) == BUF_IO_READ
+	      || recv_recovery_is_on());
+
+	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE
+	    || trx_sys_hdr_page(page_id)
+	    || fsp_is_system_temporary(page_id.space())) {
+		return false;
+	}
+
+	const ulint physical_size = zip_size ? zip_size : srv_page_size;
+
+	if (ibuf_fixed_addr_page(page_id, physical_size)
+	    || fsp_descr_page(page_id, physical_size)) {
+		return false;
+	}
+
+	fil_space_t*	space = fil_space_acquire_silent(page_id.space());
+
+	if (space == NULL) {
+		return false;
+	}
+
+	page_t*	bitmap_page = NULL;
+	ulint	bitmap_bits = 0;
+
+	ibuf_mtr_start(&mtr);
+
+	bitmap_page = ibuf_bitmap_get_map_page(page_id, zip_size, &mtr);
+
+	if (bitmap_page
+	    && fil_page_get_type(bitmap_page) != FIL_PAGE_TYPE_ALLOCATED) {
+		bitmap_bits = ibuf_bitmap_page_get_bits(
+				bitmap_page, page_id, zip_size,
+				IBUF_BITMAP_BUFFERED, &mtr);
+	}
+
+	ibuf_mtr_commit(&mtr);
+
+	space->release();
+
+	return bitmap_bits;
+}
+
 /** When an index page is read from a disk to the buffer pool, this function
 applies any buffered operations to the page and deletes the entries from the
 insert buffer. If the page is not read, but created in the buffer pool, this
@@ -4287,8 +4325,6 @@ ibuf_merge_or_delete_for_page(
 	ulint		dops[IBUF_OP_COUNT];
 
 	ut_ad(block == NULL || page_id == block->page.id);
-	ut_ad(block == NULL || buf_block_get_io_fix(block) == BUF_IO_READ
-	      || recv_recovery_is_on());
 
 	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE
 	    || trx_sys_hdr_page(page_id)

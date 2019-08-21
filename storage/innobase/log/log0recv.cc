@@ -282,8 +282,8 @@ public:
 			if (!i->second.created) {
 				continue;
 			}
-			if (buf_block_t* block = buf_page_get_gen(
-				    i->first, 0, RW_X_LATCH, NULL,
+			if (buf_block_t* block = buf_index_page_get(
+				    NULL, i->first, 0, RW_X_LATCH, NULL,
 				    BUF_GET_IF_IN_POOL, __FILE__, __LINE__,
 				    &mtr, NULL)) {
 				mutex_exit(&recv_sys.mutex);
@@ -2131,8 +2131,8 @@ void recv_apply_hashed_log_recs(bool last_batch)
 		apply:
 			mtr.start();
 			mtr.set_log_mode(MTR_LOG_NONE);
-			if (buf_block_t* block = buf_page_get_gen(
-				    page_id, 0, RW_X_LATCH, NULL,
+			if (buf_block_t* block = buf_index_page_get(
+				    NULL, page_id, 0, RW_X_LATCH, NULL,
 				    BUF_GET_IF_IN_POOL,
 				    __FILE__, __LINE__, &mtr, NULL)) {
 				buf_block_dbg_add_level(
