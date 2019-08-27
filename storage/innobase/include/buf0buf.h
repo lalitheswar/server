@@ -132,6 +132,13 @@ enum buf_page_state {
 					before putting to the free list */
 };
 
+/** Possible results while finding the block for the compressed page. */
+enum zip_err_t {
+	RETRY_AGAIN,
+	RETRY_AGAIN_AND_ASSIGN,
+	POOL_EVICT,
+	SUCCESS
+};
 
 /** This structure defines information we will fetch from each buffer pool. It
 will be used to print table IO stats */
@@ -431,6 +438,33 @@ the same set of mutexes or latches.
 @param[in]	zip_size	ROW_FORMAT=COMPRESSED page size
 @return pointer to the block */
 buf_page_t* buf_page_get_zip(const page_id_t page_id, ulint zip_size);
+
+/** Get block for the compressed page.
+@param[in]	buf_pool	buffer pool instance
+@param[in]	fix_block	block which was read from file
+@param[in]	page_id		page id which was read
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size
+@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
+BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
+@param[in]	file		file name
+@param[in]	line		line where called
+@param[out]	err		DB_SUCCESS or error code
+@param[out]	zip_err		Compressed error
+@param[in]	ibuf_merge	merge the secondary index page with
+				change buffer changes.
+@return pointer to the block or NULL */
+buf_block_t*
+buf_block_for_zip_page(
+	buf_pool_t*	buf_pool,
+	buf_block_t*	fix_block,
+	const page_id_t	page_id,
+	ulint		zip_size,
+	ulint		mode,
+	const char*	file,
+	unsigned	line,
+	dberr_t*	err,
+	zip_err_t*	zip_err,
+	bool		ibuf_merge = false);
 
 /** This is the general function used to get access to a database page.
 @param[in]	page_id		page id

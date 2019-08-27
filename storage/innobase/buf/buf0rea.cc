@@ -101,13 +101,43 @@ void buf_merge_buffered_page(
 {
 	buf_pool_t*	buf_pool = buf_pool_get(page_id);
 	buf_block_t*	block;
+	buf_page_t*	bpage;
 	rw_lock_t*	hash_lock;
 
-	block = buf_block_hash_get_x_locked(buf_pool, page_id, &hash_lock);
+	buf_pool_mutex_enter(buf_pool);
 
-	if (block == NULL) {
+	hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
+
+	rw_lock_x_lock(hash_lock);
+
+	bpage = buf_page_hash_get_low(buf_pool, page_id);
+
+	if (buf_page_get_state(bpage) == BUF_BLOCK_ZIP_PAGE) {
+		block = (buf_block_t*) bpage;
+		bpage->fix();
+		rw_lock_x_unlock(hash_lock);
+		buf_pool_mutex_exit(buf_pool);
+
+		zip_err_t	zip_err;
+		block = buf_block_for_zip_page(
+				buf_pool, block, page_id, zip_size, BUF_GET,
+				__FILE__, __LINE__, NULL, &zip_err, true);
+
+		ut_ad(block != NULL);
+		ut_ad(zip_err == SUCCESS);
+
+		if (block->page.buf_fix_count > 0) {
+			block->unfix();
+		}
+
 		return;
 	}
+
+	ut_ad(buf_page_get_state(bpage) == BUF_BLOCK_FILE_PAGE);
+
+	block = buf_page_get_block(bpage);
+
+	ut_ad(block != NULL);
 
 	buf_page_mutex_enter(block);
 
@@ -116,6 +146,8 @@ void buf_merge_buffered_page(
 	rw_lock_x_lock(&block->lock);
 
 	buf_page_mutex_exit(block);
+
+	buf_pool_mutex_exit(buf_pool);
 
 	if (block->page.is_ibuf_exists()) {
 		ibuf_merge_or_delete_for_page(
