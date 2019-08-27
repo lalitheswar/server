@@ -2085,10 +2085,6 @@ void
 ibuf_free_excess_pages(void)
 /*========================*/
 {
-	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE) {
-		return;
-	}
-
 	/* Free at most a few pages at a time, so that we do not delay the
 	requested service too much */
 
@@ -4250,8 +4246,7 @@ bool ibuf_page_exists(
 	ut_ad(block == NULL || buf_block_get_io_fix(block) == BUF_IO_READ
 	      || recv_recovery_is_on());
 
-	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE
-	    || trx_sys_hdr_page(page_id)
+	if (trx_sys_hdr_page(page_id)
 	    || fsp_is_system_temporary(page_id.space())) {
 		return false;
 	}
@@ -4326,8 +4321,7 @@ ibuf_merge_or_delete_for_page(
 
 	ut_ad(block == NULL || page_id == block->page.id);
 
-	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE
-	    || trx_sys_hdr_page(page_id)
+	if (trx_sys_hdr_page(page_id)
 	    || fsp_is_system_temporary(page_id.space())) {
 		return;
 	}

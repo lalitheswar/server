@@ -130,8 +130,7 @@ ibuf_should_try(
 	       && !dict_index_is_clust(index)
 	       && !dict_index_is_spatial(index)
 	       && index->table->quiesce == QUIESCE_NONE
-	       && (ignore_sec_unique || !dict_index_is_unique(index))
-	       && srv_force_recovery < SRV_FORCE_NO_IBUF_MERGE);
+	       && (ignore_sec_unique || !dict_index_is_unique(index)));
 }
 
 /******************************************************************//**
