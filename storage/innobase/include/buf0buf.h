@@ -364,8 +364,8 @@ NOTE! The following macros should be used instead of buf_page_get_gen,
 to improve debugging. Only values RW_S_LATCH and RW_X_LATCH are allowed
 in LA! */
 #define buf_page_get(ID, SIZE, LA, MTR)					\
-	buf_index_page_get(NULL, ID, SIZE, LA, NULL, BUF_GET, __FILE__, \
-			   __LINE__, MTR, NULL)
+	buf_page_get_gen(ID, SIZE, LA, NULL, BUF_GET, __FILE__,		\
+			 __LINE__, MTR)
 
 /**************************************************************//**
 Use these macros to bufferfix a page with no latching. Remember not to
@@ -374,8 +374,8 @@ the contents of the page! We have separated this case, because it is
 error-prone programming not to set a latch, and it should be used
 with care. */
 #define buf_page_get_with_no_latch(ID, SIZE, MTR)	\
-	buf_index_page_get(NULL, ID, SIZE, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH, \
-			   __FILE__, __LINE__, MTR, NULL)
+	buf_page_get_gen(ID, SIZE, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH, \
+			 __FILE__, __LINE__, MTR)
 /********************************************************************//**
 This is the general function used to get optimistic access to a database
 page.
@@ -467,17 +467,18 @@ buf_block_for_zip_page(
 	bool		ibuf_merge = false);
 
 /** This is the general function used to get access to a database page.
-@param[in]	page_id		page id
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
-@param[in]	guess		guessed block or NULL
-@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
+@param[in]	page_id			page id
+@param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
+@param[in]	rw_latch		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	guess			guessed block or NULL
+@param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name
-@param[in]	line		line where called
-@param[in]	mtr		mini-transaction
-@param[out]	err		DB_SUCCESS or error code
-@param[in]	sec_index	Page of secondary index
+@param[in]	file			file name
+@param[in]	line			line where called
+@param[in]	mtr			mini-transaction
+@param[in]	allow_ibuf_merge	Allow change buffer merge while
+reading the pages from file.
+@param[out]	err			DB_SUCCESS or error code
 @return pointer to the block or NULL */
 buf_block_t*
 buf_page_get_gen(
@@ -489,8 +490,8 @@ buf_page_get_gen(
 	const char*		file,
 	unsigned		line,
 	mtr_t*			mtr,
-	dberr_t*		err,
-	bool			sec_index = false);
+	bool			allow_ibuf_merge=false,
+	dberr_t*		err=NULL);
 
 /** This is the general function used to get access to database page and
 does the merging of change buffer changes if it exists for the given page id.
@@ -1245,7 +1246,7 @@ buf_page_io_complete(
 	buf_page_t*	bpage,
 	bool		dblwr = false,
 	bool		evict = false,
-	bool		merge_ibuf = false)
+	bool		ibuf_merge = false)
 	MY_ATTRIBUTE((nonnull));
 
 /********************************************************************//**
@@ -1691,8 +1692,9 @@ public:
 					protected by buf_pool->zip_mutex
 					or buf_block_t::mutex. */
 # endif /* UNIV_DEBUG */
-	/** Change buffer entries for the page exists. */
-	bool		ibuf_exists;
+	/** Change buffer entries for the page exists. It is protected by
+	block->lock. */
+	bool		ibuf_exist;
 
   void fix() { buf_fix_count++; }
   uint32_t unfix()
@@ -1716,20 +1718,9 @@ public:
   }
 
   /** Getter & Setter for ibuf_exists variable. */
-  bool is_ibuf_exists()
-  {
-    return ibuf_exists;
-  }
+  bool is_ibuf_exist() const { return ibuf_exist; }
 
-  void set_ibuf_exists()
-  {
-     ibuf_exists = true;
-  }
-
-  void unset_ibuf_exists()
-  {
-     ibuf_exists = false;
-  }
+  void set_ibuf_exist(bool ibuf_value) { ibuf_exist = ibuf_value; }
 };
 
 /** The buffer control block structure */

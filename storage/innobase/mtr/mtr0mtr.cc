@@ -918,6 +918,49 @@ mtr_t::Command::execute()
 	release_resources();
 }
 
+/** Lock the page with the given latch.
+@param[in]	block		pointer to the block
+@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	file		file name
+@param[in]	line		line number. */
+void
+mtr_t::lock_page(
+	buf_block_t*	block,
+	ulint		rw_latch,
+	const char*	file,
+	unsigned	line)
+{
+	mtr_memo_type_t fix_type;
+
+	switch (rw_latch) {
+	case RW_NO_LATCH:
+
+		fix_type = MTR_MEMO_BUF_FIX;
+		break;
+
+	case RW_S_LATCH:
+		rw_lock_s_lock_inline(&block->lock, 0, file, line);
+
+		fix_type = MTR_MEMO_PAGE_S_FIX;
+		break;
+
+	case RW_SX_LATCH:
+		rw_lock_sx_lock_inline(&block->lock, 0, file, line);
+
+		fix_type = MTR_MEMO_PAGE_SX_FIX;
+		break;
+
+	default:
+		ut_ad(rw_latch == RW_X_LATCH);
+		rw_lock_x_lock_inline(&block->lock, 0, file, line);
+
+		fix_type = MTR_MEMO_PAGE_X_FIX;
+		break;
+	}
+
+	memo_push(block, fix_type);
+}
+
 #ifdef UNIV_DEBUG
 /** Check if memo contains the given item.
 @return	true if contains */

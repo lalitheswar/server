@@ -3143,7 +3143,7 @@ dict_stats_update(
 
 	if (!table->is_readable()) {
 		return (dict_stats_report_error(table));
-	} else if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE) {
+	} else if (srv_force_recovery > SRV_FORCE_NO_IBUF_MERGE) {
 		/* If we have set a high innodb_force_recovery level, do
 		not calculate statistics, as a badly corrupted index can
 		cause a crash in it. */

@@ -267,11 +267,11 @@ rtr_pcur_getnext_from_path(
 
 		dberr_t err = DB_SUCCESS;
 
-		block = buf_index_page_get(
-			index,
+		block = buf_page_get_gen(
 			page_id_t(index->table->space_id,
 			          next_rec.page_no), zip_size,
-			rw_latch, NULL, BUF_GET, __FILE__, __LINE__, mtr, &err);
+			rw_latch, NULL, BUF_GET, __FILE__, __LINE__, mtr,
+			false, &err);
 
 		if (block == NULL) {
 			continue;

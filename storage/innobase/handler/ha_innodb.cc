@@ -5901,7 +5901,7 @@ initialize_auto_increment(dict_table_t* table, const Field* field)
 		table->persistent_autoinc without
 		autoinc_mutex protection, and there might be multiple
 		ha_innobase::open() executing concurrently. */
-	} else if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE) {
+	} else if (srv_force_recovery > SRV_FORCE_NO_IBUF_MERGE) {
 		/* If the recovery level is set so high that writes
 		are disabled we force the AUTOINC counter to 0
 		value effectively disabling writes to the table.
@@ -14037,7 +14037,7 @@ ha_innobase::info_low(
 		}
 	}
 
-	if (srv_force_recovery >= SRV_FORCE_NO_IBUF_MERGE) {
+	if (srv_force_recovery > SRV_FORCE_NO_IBUF_MERGE) {
 
 		goto func_exit;
 

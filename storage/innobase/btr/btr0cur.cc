@@ -6252,10 +6252,10 @@ btr_estimate_n_rows_in_range_on_level(
 		attempting to read a page that is no longer part of
 		the B-tree. We pass BUF_GET_POSSIBLY_FREED in order to
 		silence a debug assertion about this. */
-		block = buf_index_page_get(
-				index, page_id, zip_size, RW_S_LATCH,
+		block = buf_page_get_gen(
+				page_id, zip_size, RW_S_LATCH,
 				NULL, BUF_GET_POSSIBLY_FREED, __FILE__,
-				__LINE__, &mtr, &err);
+				__LINE__, &mtr, false, &err);
 
 		ut_ad((block != NULL) == (err == DB_SUCCESS));
 

@@ -2554,9 +2554,6 @@ ibuf_contract(
 }
 
 /** Contract the change buffer by reading pages to the buffer pool.
-@param[in]	full		If true, do a full contraction based
-on PCT_IO(100). If false, the size of contract batch is determined
-based on the current size of the change buffer.
 @return a lower limit for the combined size in bytes of entries which
 will be merged from ibuf trees to the pages read, 0 if ibuf is
 empty */

@@ -257,7 +257,7 @@ recovery and open all tables in RO mode instead of RW mode. We don't
 sync the max trx id to disk either. */
 extern my_bool	srv_read_only_mode;
 /** Set if InnoDB operates in read-only mode or innodb-force-recovery
-is greater than SRV_FORCE_NO_TRX_UNDO. */
+is greater than SRV_FORCE_NO_IBUF_MERGE. */
 extern my_bool	high_level_read_only;
 /** store to its own file each table created by an user; data
 dictionary tables are in the system tablespace 0 */

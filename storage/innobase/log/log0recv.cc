@@ -259,19 +259,16 @@ public:
 		}
 	}
 
-	/** On the last recovery batch, merge buffered changes to those
-	pages that were initialized by buf_page_create() and still reside
-	in the buffer pool. Stale pages are not allowed in the buffer pool.
+	/** On the last recovery batch, mark whether the page contains
+	change buffered changes for the list of pages that were initialized
+	by buf_page_create() and still reside in the buffer pool.
 
 	Note: When MDEV-14481 implements redo log apply in the
 	background, we will have to ensure that buf_page_get_gen()
 	will not deliver stale pages to users (pages on which the
-	change buffer was not merged yet).  Normally, the change
-	buffer merge is performed on I/O completion. Maybe, add a
-	flag to buf_page_t and perform the change buffer merge on
-	the first actual access?
+	change buffer was not merged yet).
 	@param[in,out]	mtr	dummy mini-transaction */
-	void ibuf_merge(mtr_t& mtr)
+	void mark_ibuf_exist(mtr_t& mtr)
 	{
 		ut_ad(mutex_own(&recv_sys.mutex));
 		ut_ad(!recv_no_ibuf_operations);
@@ -282,14 +279,15 @@ public:
 			if (!i->second.created) {
 				continue;
 			}
-			if (buf_block_t* block = buf_index_page_get(
-				    NULL, i->first, 0, RW_X_LATCH, NULL,
-				    BUF_GET_IF_IN_POOL, __FILE__, __LINE__,
-				    &mtr, NULL)) {
+			if (buf_block_t* block = buf_page_get_gen(
+					i->first, 0, RW_X_LATCH, NULL,
+					BUF_GET_IF_IN_POOL, __FILE__, __LINE__,
+					&mtr)) {
 				mutex_exit(&recv_sys.mutex);
-				ibuf_merge_or_delete_for_page(
-					block, i->first,
-					block->zip_size(), true);
+				block->page.set_ibuf_exist(
+					ibuf_page_exists(
+						block, i->first,
+						block->zip_size()));
 				mtr.commit();
 				mtr.start();
 				mutex_enter(&recv_sys.mutex);
@@ -2275,7 +2273,7 @@ done:
 		mlog_init.reset();
 	} else if (!recv_no_ibuf_operations) {
 		/* We skipped this in buf_page_create(). */
-		mlog_init.ibuf_merge(mtr);
+		mlog_init.mark_ibuf_exist(mtr);
 	}
 
 	recv_sys.apply_log_recs = false;

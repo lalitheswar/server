@@ -528,6 +528,17 @@ struct mtr_t {
 	static inline bool is_block_dirtied(const buf_block_t* block)
 		MY_ATTRIBUTE((warn_unused_result));
 
+	/** Lock the page with the given latch.
+	@param[in]	block		pointer to the block
+	@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+	@param[in]	file		file name
+	@param[in]	line		line number. */
+	void lock_page(
+		buf_block_t*	block,
+		ulint		rw_latch,
+		const char*	file,
+		unsigned	line);
+
 private:
 	class Command;
 

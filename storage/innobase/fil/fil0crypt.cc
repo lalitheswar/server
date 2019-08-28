@@ -1253,10 +1253,10 @@ static bool fil_crypt_start_encrypting_space(fil_space_t* space)
 
 		/* 2 - get page 0 */
 		dberr_t err = DB_SUCCESS;
-		buf_block_t* block = buf_index_page_get(
-			NULL, page_id_t(space->id, 0), space->zip_size(),
+		buf_block_t* block = buf_page_get_gen(
+			page_id_t(space->id, 0), space->zip_size(),
 			RW_X_LATCH, NULL, BUF_GET, __FILE__, __LINE__,
-			&mtr, &err);
+			&mtr, false, &err);
 
 
 		/* 3 - write crypt data to page 0 */

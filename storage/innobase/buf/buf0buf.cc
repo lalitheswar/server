@@ -4432,7 +4432,7 @@ buf_block_for_zip_page(
 			ibuf_merge_or_delete_for_page(
 				block, block->page.id, zip_size, true);
 		} else if (ibuf_page_exists(block, block->page.id, zip_size)) {
-			block->page.set_ibuf_exists();
+			block->page.set_ibuf_exist(true);
 		}
 	}
 
@@ -4453,51 +4453,6 @@ buf_block_for_zip_page(
 	*zip_err = SUCCESS;
 
 	return block;
-}
-
-/** Lock the page with the give latch in mini-transaction
-@param[in]	block		Pointer to the block
-@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
-@param[in]	file		file name
-@param[in]	line		line where it is called
-@param[in]	mtr		mini-transation */
-static
-void buf_page_mtr_lock(
-	buf_block_t*	block,
-	ulint		rw_latch,
-	const char*	file,
-	unsigned	line,
-	mtr_t*		mtr)
-{
-	mtr_memo_type_t	fix_type;
-
-	switch (rw_latch) {
-	case RW_NO_LATCH:
-
-		fix_type = MTR_MEMO_BUF_FIX;
-		break;
-
-	case RW_S_LATCH:
-		rw_lock_s_lock_inline(&block->lock, 0, file, line);
-
-		fix_type = MTR_MEMO_PAGE_S_FIX;
-		break;
-
-	case RW_SX_LATCH:
-		rw_lock_sx_lock_inline(&block->lock, 0, file, line);
-
-		fix_type = MTR_MEMO_PAGE_SX_FIX;
-		break;
-
-	default:
-		ut_ad(rw_latch == RW_X_LATCH);
-		rw_lock_x_lock_inline(&block->lock, 0, file, line);
-
-		fix_type = MTR_MEMO_PAGE_X_FIX;
-		break;
-	}
-
-	mtr_memo_push(mtr, block, fix_type);
 }
 
 /** This is the general function used to get access to database page and
@@ -4532,7 +4487,7 @@ buf_index_page_get(
 	if (sec_index) {
 		buf_block_t* block = buf_page_get_gen(
 				page_id, zip_size, rw_latch, guess,
-				mode, file, line, mtr, err, sec_index);
+				mode, file, line, mtr, sec_index, err);
 
 		if (!block) {
 			return NULL;
@@ -4540,37 +4495,40 @@ buf_index_page_get(
 
 		rw_lock_x_lock(&block->lock);
 
-		if (block->page.is_ibuf_exists()) {
+		if (block->page.is_ibuf_exist()) {
 
 			/* Merge the page from change buffer. */
 			ibuf_merge_or_delete_for_page(
 				block, block->page.id, zip_size, true);
-			block->page.unset_ibuf_exists();
+			block->page.set_ibuf_exist(false);
 		}
 
 		rw_lock_x_unlock(&block->lock);
 
-		buf_page_mtr_lock(block, rw_latch, file, line, mtr);
+		mtr->lock_page(block, rw_latch, file, line);
 
 		return block;
 	}
 
 	return buf_page_get_gen(page_id, zip_size, rw_latch, guess,
-				mode, file, line, mtr, err);
+				mode, file, line, mtr, false, err);
 }
 
 /** This is the general function used to get access to a database page.
-@param[in]	page_id		page id
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
-@param[in]	guess		guessed block or NULL
-@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
+@param[in]	page_id			page id
+@param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
+@param[in]	rw_latch		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	guess			guessed block or NULL
+@param[in]	mode			BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name
-@param[in]	line		line where called
-@param[in]	mtr		mini-transaction
+@param[in]	file			file name
+@param[in]	line			line where called
+@param[in]	mtr			mini-transaction
+@param[in]	allow_ibuf_merge	Allow change buffer merge to happen
+while reading the page from file
 @param[out]	err		DB_SUCCESS or error code
-@param[in]	sec_index	page of secondary index
+then it makes sure that it does merging of change buffer changes while
+reading the page from file.
 @return pointer to the block or NULL */
 buf_block_t*
 buf_page_get_gen(
@@ -4582,8 +4540,8 @@ buf_page_get_gen(
 	const char*		file,
 	unsigned		line,
 	mtr_t*			mtr,
-	dberr_t*		err,
-	bool			sec_index)
+	bool			allow_ibuf_merge,
+	dberr_t*		err)
 {
 	buf_block_t*	block;
 	unsigned	access_time;
@@ -4741,7 +4699,8 @@ loop:
 		corrupted, or if an encrypted page with a valid
 		checksum cannot be decypted. */
 
-		dberr_t local_err = buf_read_page(page_id, zip_size);
+		dberr_t local_err = buf_read_page(
+				page_id, zip_size, allow_ibuf_merge);
 
 		if (local_err == DB_SUCCESS) {
 			buf_read_ahead_random(page_id, zip_size,
@@ -4900,7 +4859,7 @@ evict_from_pool:
 		block = buf_block_for_zip_page(
 				buf_pool, fix_block, page_id,
 				zip_size, mode, file, line,
-				err, &zip_err);
+				err, &zip_err, allow_ibuf_merge);
 
 		if (block == NULL) {
 			if (zip_err == RETRY_AGAIN) {
@@ -5083,11 +5042,11 @@ evict_from_pool:
 		return NULL;
 	}
 
-	if (sec_index) {
+	if (allow_ibuf_merge) {
 		return fix_block;
 	}
 
-	buf_page_mtr_lock(fix_block, rw_latch, file, line, mtr);
+	mtr->lock_page(fix_block, rw_latch, file, line);
 
 	if (mode != BUF_PEEK_IF_IN_POOL && !access_time) {
 		/* In the case of a first access, try to apply linear
@@ -5413,7 +5372,7 @@ buf_page_init_low(
 	bpage->encrypted = false;
 	bpage->real_size = 0;
 	bpage->slot = NULL;
-	bpage->ibuf_exists = false;
+	bpage->ibuf_exist = false;
 
 	HASH_INVALIDATE(bpage, hash);
 
@@ -6188,7 +6147,7 @@ static dberr_t buf_page_check_corrupt(buf_page_t* bpage, fil_space_t* space)
 				not match */
 UNIV_INTERN
 dberr_t
-buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict, bool merge_ibuf)
+buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict, bool ibuf_merge)
 {
 	enum buf_io_fix	io_type;
 	buf_pool_t*	buf_pool = buf_pool_from_bpage(bpage);
@@ -6375,15 +6334,15 @@ database_corrupted:
 					<< " is not found or"
 					" used encryption algorithm or method does not match."
 					" Can't continue opening the table.";
-			} else if (merge_ibuf) {
+			} else if (ibuf_merge) {
 				ibuf_merge_or_delete_for_page(
 					(buf_block_t*) bpage, bpage->id,
 					bpage->zip_size(), true);
 			} else {
-
-				bpage->ibuf_exists = ibuf_page_exists(
-					(buf_block_t*) bpage, bpage->id,
-					bpage->zip_size());
+				bpage->set_ibuf_exist(
+					ibuf_page_exists(
+						(buf_block_t*) bpage, bpage->id,
+						bpage->zip_size()));
 			}
 
 		}

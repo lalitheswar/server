@@ -1410,13 +1410,12 @@ trx_undo_assign(trx_t* trx, dberr_t* err, mtr_t* mtr)
 	trx_undo_t* undo = trx->rsegs.m_redo.undo;
 
 	if (undo) {
-		return buf_index_page_get(
-			NULL,
+		return buf_page_get_gen(
 			page_id_t(undo->rseg->space->id, undo->last_page_no),
 			0, RW_X_LATCH,
 			buf_pool_is_obsolete(undo->withdraw_clock)
 			? NULL : undo->guess_block,
-			BUF_GET, __FILE__, __LINE__, mtr, err);
+			BUF_GET, __FILE__, __LINE__, mtr, false, err);
 	}
 
 	trx_rseg_t* rseg = trx->rsegs.m_redo.rseg;
@@ -1467,12 +1466,12 @@ trx_undo_assign_low(trx_t* trx, trx_rseg_t* rseg, trx_undo_t** undo,
 	      == (is_temp ? MTR_LOG_NO_REDO : MTR_LOG_ALL));
 
 	if (*undo) {
-		return buf_index_page_get(
-			NULL, page_id_t(rseg->space->id, (*undo)->last_page_no),
+		return buf_page_get_gen(
+			page_id_t(rseg->space->id, (*undo)->last_page_no),
 			0, RW_X_LATCH,
 			buf_pool_is_obsolete((*undo)->withdraw_clock)
 			? NULL : (*undo)->guess_block,
-			BUF_GET, __FILE__, __LINE__, mtr, err);
+			BUF_GET, __FILE__, __LINE__, mtr, false, err);
 	}
 
 	DBUG_EXECUTE_IF(
