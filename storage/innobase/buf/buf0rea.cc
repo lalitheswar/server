@@ -143,11 +143,13 @@ void buf_merge_buffered_page(
 
 	rw_lock_x_unlock(hash_lock);
 
-	rw_lock_x_lock(&block->lock);
+	block->fix();
 
 	buf_page_mutex_exit(block);
 
 	buf_pool_mutex_exit(buf_pool);
+
+	rw_lock_x_lock(&block->lock);
 
 	if (block->page.is_ibuf_exist()) {
 		ibuf_merge_or_delete_for_page(
@@ -156,6 +158,8 @@ void buf_merge_buffered_page(
 	}
 
 	rw_lock_x_unlock(&block->lock);
+
+	block->unfix();
 }
 
 /** Function for change buffer merges to happen for the pages. It is a
