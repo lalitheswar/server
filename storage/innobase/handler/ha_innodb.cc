@@ -16683,6 +16683,9 @@ innobase_commit_by_xid(
 {
 	DBUG_ASSERT(hton == innodb_hton_ptr);
 
+	DBUG_EXECUTE_IF("innobase_xa_fail",
+			return XAER_RMFAIL;);
+
 	if (high_level_read_only) {
 		return(XAER_RMFAIL);
 	}
@@ -16714,6 +16717,9 @@ innobase_rollback_by_xid(
 				identification */
 {
 	DBUG_ASSERT(hton == innodb_hton_ptr);
+
+	DBUG_EXECUTE_IF("innobase_xa_fail",
+			return XAER_RMFAIL;);
 
 	if (high_level_read_only) {
 		return(XAER_RMFAIL);
