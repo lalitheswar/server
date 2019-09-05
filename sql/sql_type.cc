@@ -1,5 +1,5 @@
 /*
-   Copyright (c) 2015  MariaDB Foundation.
+   Copyright (c) 2015,2019 MariaDB
 
  This program is free software; you can redistribute it and/or modify
  it under the terms of the GNU General Public License as published by
@@ -24,17 +24,29 @@
 #include "log.h"
 #include "tztime.h"
 
+
+const DTCollation &DTCollation_numeric::singleton()
+{
+  static const DTCollation_numeric tmp;
+  return tmp;
+}
+
+
 Type_handler_row         type_handler_row;
 
 Type_handler_null        type_handler_null;
 
 Type_handler_bool        type_handler_bool;
-Type_handler_tiny        type_handler_tiny;
-Type_handler_short       type_handler_short;
-Type_handler_long        type_handler_long;
-Type_handler_int24       type_handler_int24;
-Type_handler_longlong    type_handler_longlong;
-Type_handler_longlong    type_handler_ulonglong; // Only used for CAST() for now
+Type_handler_tiny        type_handler_stiny;
+Type_handler_short       type_handler_sshort;
+Type_handler_long        type_handler_slong;
+Type_handler_int24       type_handler_sint24;
+Type_handler_longlong    type_handler_slonglong;
+Type_handler_utiny       type_handler_utiny;
+Type_handler_ushort      type_handler_ushort;
+Type_handler_ulong       type_handler_ulong;
+Type_handler_uint24      type_handler_uint24;
+Type_handler_ulonglong   type_handler_ulonglong;
 Type_handler_vers_trx_id type_handler_vers_trx_id;
 Type_handler_float       type_handler_float;
 Type_handler_double      type_handler_double;
@@ -109,6 +121,58 @@ const Type_collection *Type_handler::type_collection() const
 }
 
 
+bool Type_handler::is_traditional_scalar_type() const
+{
+  return type_collection() == &type_collection_std;
+}
+
+
+class Type_collection_row: public Type_collection
+{
+public:
+  bool init(Type_handler_data *data) override
+  {
+    return false;
+  }
+  const Type_handler *handler_by_name(const LEX_CSTRING &name) const override
+  {
+    return NULL;
+  }
+  const Type_handler *aggregate_for_result(const Type_handler *a,
+                                           const Type_handler *b)
+                                           const override
+  {
+    return NULL;
+  }
+  const Type_handler *aggregate_for_comparison(const Type_handler *a,
+                                               const Type_handler *b)
+                                               const override
+  {
+    DBUG_ASSERT(a == &type_handler_row);
+    DBUG_ASSERT(b == &type_handler_row);
+    return &type_handler_row;
+  }
+  const Type_handler *aggregate_for_min_max(const Type_handler *a,
+                                            const Type_handler *b)
+                                            const override
+  {
+    return NULL;
+  }
+  const Type_handler *aggregate_for_num_op(const Type_handler *a,
+                                           const Type_handler *b)
+                                           const override
+  {
+    return NULL;
+  }
+};
+
+
+static Type_collection_row type_collection_row;
+
+const Type_collection *Type_handler_row::type_collection() const
+{
+  return &type_collection_row;
+}
 
 
 bool Type_handler_data::init()
@@ -1018,7 +1082,7 @@ Datetime_truncation_not_needed::Datetime_truncation_not_needed(THD *thd, Item *i
 
 /********************************************************************/
 
-uint Type_std_attributes::count_max_decimals(Item **item, uint nitems)
+uint Type_numeric_attributes::find_max_decimals(Item **item, uint nitems)
 {
   uint res= 0;
   for (uint i= 0; i < nitems; i++)
@@ -1027,55 +1091,61 @@ uint Type_std_attributes::count_max_decimals(Item **item, uint nitems)
 }
 
 
+uint Type_numeric_attributes::count_unsigned(Item **item, uint nitems)
+{
+  uint res= 0;
+  for (uint i= 0 ; i < nitems ; i++)
+  {
+    if (item[i]->unsigned_flag)
+      res++;
+  }
+  return res;
+}
+
+
+uint32 Type_numeric_attributes::find_max_char_length(Item **item, uint nitems)
+{
+  uint32 char_length= 0;
+  for (uint i= 0; i < nitems ; i++)
+    set_if_bigger(char_length, item[i]->max_char_length());
+  return char_length;
+}
+
+
+uint32 Type_numeric_attributes::find_max_octet_length(Item **item, uint nitems)
+{
+  uint32 octet_length= 0;
+  for (uint i= 0; i < nitems ; i++)
+    set_if_bigger(octet_length, item[i]->max_length);
+  return octet_length;
+}
+
+
+int Type_numeric_attributes::find_max_decimal_int_part(Item **item, uint nitems)
+{
+  int max_int_part= 0;
+  for (uint i=0 ; i < nitems ; i++)
+    set_if_bigger(max_int_part, item[i]->decimal_int_part());
+  return max_int_part;
+}
+
+
 /**
   Set max_length/decimals of function if function is fixed point and
   result length/precision depends on argument ones.
 */
 
-void Type_std_attributes::count_decimal_length(Item **item, uint nitems)
+void
+Type_numeric_attributes::aggregate_numeric_attributes_decimal(Item **item,
+                                                              uint nitems,
+                                                              bool unsigned_arg)
 {
-  int max_int_part= 0;
-  decimals= 0;
-  unsigned_flag= 1;
-  for (uint i=0 ; i < nitems ; i++)
-  {
-    set_if_bigger(decimals, item[i]->decimals);
-    set_if_bigger(max_int_part, item[i]->decimal_int_part());
-    set_if_smaller(unsigned_flag, item[i]->unsigned_flag);
-  }
+  int max_int_part= find_max_decimal_int_part(item, nitems);
+  decimals= find_max_decimals(item, nitems);
   int precision= MY_MIN(max_int_part + decimals, DECIMAL_MAX_PRECISION);
-  fix_char_length(my_decimal_precision_to_length_no_truncation(precision,
-                                                               (uint8) decimals,
-                                                               unsigned_flag));
-}
-
-
-/**
-  Set max_length of if it is maximum length of its arguments.
-*/
-
-void Type_std_attributes::count_only_length(Item **item, uint nitems)
-{
-  uint32 char_length= 0;
-  unsigned_flag= 0;
-  for (uint i= 0; i < nitems ; i++)
-  {
-    set_if_bigger(char_length, item[i]->max_char_length());
-    set_if_bigger(unsigned_flag, item[i]->unsigned_flag);
-  }
-  fix_char_length(char_length);
-}
-
-
-void Type_std_attributes::count_octet_length(Item **item, uint nitems)
-{
-  max_length= 0;
-  unsigned_flag= 0;
-  for (uint i= 0; i < nitems ; i++)
-  {
-    set_if_bigger(max_length, item[i]->max_length);
-    set_if_bigger(unsigned_flag, item[i]->unsigned_flag);
-  }
+  max_length= my_decimal_precision_to_length_no_truncation(precision,
+                                                           (uint8) decimals,
+                                                           unsigned_flag);
 }
 
 
@@ -1084,7 +1154,9 @@ void Type_std_attributes::count_octet_length(Item **item, uint nitems)
   result length/precision depends on argument ones.
 */
 
-void Type_std_attributes::count_real_length(Item **items, uint nitems)
+void
+Type_numeric_attributes::aggregate_numeric_attributes_real(Item **items,
+                                                           uint nitems)
 {
   uint32 length= 0;
   decimals= 0;
@@ -1123,16 +1195,17 @@ void Type_std_attributes::count_real_length(Item **items, uint nitems)
 
   @retval            False on success, true on error.
 */
-bool Type_std_attributes::count_string_length(const char *func_name,
-                                              Item **items, uint nitems)
+bool Type_std_attributes::aggregate_attributes_string(const char *func_name,
+                                                      Item **items, uint nitems)
 {
   if (agg_arg_charsets_for_string_result(collation, func_name,
                                          items, nitems, 1))
     return true;
   if (collation.collation == &my_charset_bin)
-    count_octet_length(items, nitems);
+    max_length= find_max_octet_length(items, nitems);
   else
-    count_only_length(items, nitems);
+    fix_char_length(find_max_char_length(items, nitems));
+  unsigned_flag= false;
   decimals= max_length ? NOT_FIXED_DEC : 0;
   return false;
 }
@@ -1185,6 +1258,8 @@ Type_handler::string_type_handler(uint max_octet_length)
     return &type_handler_long_blob;
   else if (max_octet_length >= 65536)
     return &type_handler_medium_blob;
+  else if (max_octet_length >= MAX_FIELD_VARCHARLENGTH)
+    return &type_handler_blob;
   return &type_handler_varchar;
 }
 
@@ -1277,7 +1352,7 @@ Type_handler::get_handler_by_cmp_type(Item_result type)
 {
   switch (type) {
   case REAL_RESULT:       return &type_handler_double;
-  case INT_RESULT:        return &type_handler_longlong;
+  case INT_RESULT:        return &type_handler_slonglong;
   case DECIMAL_RESULT:    return &type_handler_newdecimal;
   case STRING_RESULT:     return &type_handler_long_blob;
   case TIME_RESULT:       return &type_handler_datetime;
@@ -1351,24 +1426,173 @@ const Name
   Type_handler_datetime_common::m_name_datetime(STRING_WITH_LEN("datetime")),
   Type_handler_timestamp_common::m_name_timestamp(STRING_WITH_LEN("timestamp"));
 
+
+const Name Type_handler_utiny::name() const
+{
+  static Name tmp(STRING_WITH_LEN("tiny unsigned"));
+  return tmp;
+}
+
+
+const Name Type_handler_ushort::name() const
+{
+  static Name tmp(STRING_WITH_LEN("smallint unsigned"));
+  return tmp;
+}
+
+
+const Name Type_handler_uint24::name() const
+{
+  static Name tmp(STRING_WITH_LEN("mediumint unsigned"));
+  return tmp;
+}
+
+
+const Name Type_handler_ulong::name() const
+{
+  static Name tmp(STRING_WITH_LEN("int unsigned"));
+  return tmp;
+}
+
+
+const Name Type_handler_ulonglong::name() const
+{
+  static Name tmp(STRING_WITH_LEN("bigint unsigned"));
+  return tmp;
+}
+
+
+/***************************************************************************/
+
 const Name
   Type_handler::m_version_default(STRING_WITH_LEN("")),
   Type_handler::m_version_mariadb53(STRING_WITH_LEN("mariadb-5.3")),
   Type_handler::m_version_mysql56(STRING_WITH_LEN("mysql-5.6"));
 
 
-const Type_limits_int
-  Type_handler_tiny::m_limits_sint8=      Type_limits_sint8(),
-  Type_handler_tiny::m_limits_uint8=      Type_limits_uint8(),
-  Type_handler_short::m_limits_sint16=    Type_limits_sint16(),
-  Type_handler_short::m_limits_uint16=    Type_limits_uint16(),
-  Type_handler_int24::m_limits_sint24=    Type_limits_sint24(),
-  Type_handler_int24::m_limits_uint24=    Type_limits_uint24(),
-  Type_handler_long::m_limits_sint32=     Type_limits_sint32(),
-  Type_handler_long::m_limits_uint32=     Type_limits_uint32(),
-  Type_handler_longlong::m_limits_sint64= Type_limits_sint64(),
-  Type_handler_longlong::m_limits_uint64= Type_limits_uint64();
+/***************************************************************************/
 
+const Type_limits_int *Type_handler_tiny::type_limits_int() const
+{
+  static const Type_limits_sint8 limits_sint8;
+  return &limits_sint8;
+}
+
+const Type_limits_int *Type_handler_utiny::type_limits_int() const
+{
+  static const Type_limits_uint8 limits_uint8;
+  return &limits_uint8;
+}
+
+const Type_limits_int *Type_handler_short::type_limits_int() const
+{
+  static const Type_limits_sint16 limits_sint16;
+  return &limits_sint16;
+}
+
+const Type_limits_int *Type_handler_ushort::type_limits_int() const
+{
+  static const Type_limits_uint16 limits_uint16;
+  return &limits_uint16;
+}
+
+const Type_limits_int *Type_handler_int24::type_limits_int() const
+{
+  static const Type_limits_sint24 limits_sint24;
+  return &limits_sint24;
+}
+
+const Type_limits_int *Type_handler_uint24::type_limits_int() const
+{
+  static const Type_limits_uint24 limits_uint24;
+  return &limits_uint24;
+}
+
+const Type_limits_int *Type_handler_long::type_limits_int() const
+{
+  static const Type_limits_sint32 limits_sint32;
+  return &limits_sint32;
+}
+
+const Type_limits_int *Type_handler_ulong::type_limits_int() const
+{
+  static const Type_limits_uint32 limits_uint32;
+  return &limits_uint32;
+}
+
+const Type_limits_int *Type_handler_longlong::type_limits_int() const
+{
+  static const Type_limits_sint64 limits_sint64;
+  return &limits_sint64;
+}
+
+const Type_limits_int *Type_handler_ulonglong::type_limits_int() const
+{
+  static const Type_limits_uint64 limits_uint64;
+  return &limits_uint64;
+}
+
+
+/***************************************************************************/
+const Type_handler *Type_handler_bool::type_handler_signed() const
+{
+  return &type_handler_bool;
+}
+
+const Type_handler *Type_handler_bool::type_handler_unsigned() const
+{
+  return &type_handler_bool;
+}
+
+const Type_handler *Type_handler_tiny::type_handler_signed() const
+{
+  return &type_handler_stiny;
+}
+
+const Type_handler *Type_handler_tiny::type_handler_unsigned() const
+{
+  return &type_handler_utiny;
+}
+
+const Type_handler *Type_handler_short::type_handler_signed() const
+{
+  return &type_handler_sshort;
+}
+
+const Type_handler *Type_handler_short::type_handler_unsigned() const
+{
+  return &type_handler_ushort;
+}
+
+const Type_handler *Type_handler_int24::type_handler_signed() const
+{
+  return &type_handler_sint24;
+}
+
+const Type_handler *Type_handler_int24::type_handler_unsigned() const
+{
+  return &type_handler_uint24;
+}
+
+const Type_handler *Type_handler_long::type_handler_signed() const
+{
+  return &type_handler_slong;
+}
+
+const Type_handler *Type_handler_long::type_handler_unsigned() const
+{
+  return &type_handler_ulong;
+}
+
+const Type_handler *Type_handler_longlong::type_handler_signed() const
+{
+  return &type_handler_slonglong;
+}
+
+const Type_handler *Type_handler_longlong::type_handler_unsigned() const
+{
+  return &type_handler_ulonglong;
+}
 
 /***************************************************************************/
 
@@ -1380,7 +1604,7 @@ const Type_handler *Type_handler_null::type_handler_for_comparison() const
 
 const Type_handler *Type_handler_int_result::type_handler_for_comparison() const
 {
-  return &type_handler_longlong;
+  return &type_handler_slonglong;
 }
 
 
@@ -1449,7 +1673,7 @@ const Type_handler *Type_handler_typelib::type_handler_for_item_field() const
 
 const Type_handler *Type_handler_typelib::cast_to_int_type_handler() const
 {
-  return &type_handler_longlong;
+  return &type_handler_slonglong;
 }
 
 
@@ -1472,12 +1696,20 @@ Type_handler_hybrid_field_type::aggregate_for_result(const Type_handler *other)
 
 
 const Type_handler *
-Type_handler::type_handler_long_or_longlong(uint max_char_length)
+Type_handler::type_handler_long_or_longlong(uint max_char_length,
+                                            bool unsigned_flag)
 {
+  if (unsigned_flag)
+  {
+    if (max_char_length <= MY_INT32_NUM_DECIMAL_DIGITS - 2)
+      return &type_handler_ulong;
+    return &type_handler_ulonglong;
+  }
   if (max_char_length <= MY_INT32_NUM_DECIMAL_DIGITS - 2)
-    return &type_handler_long;
-  return &type_handler_longlong;
+    return &type_handler_slong;
+  return &type_handler_slonglong;
 }
+
 
 /*
   This method is called for CASE (and its abbreviations) and LEAST/GREATEST
@@ -1489,8 +1721,8 @@ const Type_handler *
 Type_handler::bit_and_int_mixture_handler(uint max_char_length)
 {
   if (max_char_length <= MY_INT32_NUM_DECIMAL_DIGITS)
-    return &type_handler_long;
-  return &type_handler_longlong;
+    return &type_handler_slong;
+  return &type_handler_slonglong;
 }
 
 
@@ -1552,9 +1784,9 @@ Type_handler_hybrid_field_type::aggregate_for_result(const char *funcname,
     {
       bit_and_non_bit_mixture_found= true;
       if (type_handler() == &type_handler_bit)
-        set_handler(&type_handler_longlong); // BIT + non-BIT
+        set_handler(&type_handler_slonglong); // BIT + non-BIT
       else
-        cur= &type_handler_longlong; // non-BIT + BIT
+        cur= &type_handler_slonglong; // non-BIT + BIT
     }
     if (aggregate_for_result(cur))
     {
@@ -1563,7 +1795,7 @@ Type_handler_hybrid_field_type::aggregate_for_result(const char *funcname,
       return true;
     }
   }
-  if (bit_and_non_bit_mixture_found && type_handler() == &type_handler_longlong)
+  if (bit_and_non_bit_mixture_found && type_handler() == &type_handler_slonglong)
     set_handler(Type_handler::bit_and_int_mixture_handler(max_display_length));
   return false;
 }
@@ -1605,7 +1837,7 @@ Type_collection_std::aggregate_for_comparison(const Type_handler *ha,
   if (a == STRING_RESULT && b == STRING_RESULT)
     return &type_handler_long_blob;
   if (a == INT_RESULT && b == INT_RESULT)
-    return &type_handler_longlong;
+    return &type_handler_slonglong;
   if (a == ROW_RESULT || b == ROW_RESULT)
     return &type_handler_row;
   if (a == TIME_RESULT || b == TIME_RESULT)
@@ -1703,9 +1935,9 @@ Type_collection_std::aggregate_for_min_max(const Type_handler *ha,
     if (ha != hb)
     {
       if (ha == &type_handler_bit)
-        ha= &type_handler_longlong;
+        ha= &type_handler_slonglong;
       else if (hb == &type_handler_bit)
-        hb= &type_handler_longlong;
+        hb= &type_handler_slonglong;
     }
     return Type_collection_std::aggregate_for_result(ha, hb);
   }
@@ -1752,15 +1984,12 @@ Type_handler_hybrid_field_type::aggregate_for_min_max(const char *funcname,
                                                       Item **items, uint nitems)
 {
   bool bit_and_non_bit_mixture_found= false;
-  uint32 max_display_length;
   // LEAST/GREATEST require at least two arguments
   DBUG_ASSERT(nitems > 1);
   set_handler(items[0]->type_handler());
-  max_display_length= items[0]->max_display_length();
   for (uint i= 1; i < nitems;  i++)
   {
     const Type_handler *cur= items[i]->type_handler();
-    set_if_bigger(max_display_length, items[i]->max_display_length());
     // Check if BIT + non-BIT, or non-BIT + BIT
     bit_and_non_bit_mixture_found|= (m_type_handler == &type_handler_bit) !=
                                     (cur == &type_handler_bit);
@@ -1771,8 +2000,13 @@ Type_handler_hybrid_field_type::aggregate_for_min_max(const char *funcname,
       return true;
     }
   }
-  if (bit_and_non_bit_mixture_found && type_handler() == &type_handler_longlong)
+  if (bit_and_non_bit_mixture_found && type_handler() == &type_handler_slonglong)
+  {
+    uint32 max_display_length= items[0]->max_display_length();
+    for (uint i= 1; i < nitems; i++)
+      set_if_bigger(max_display_length, items[i]->max_display_length());
     set_handler(Type_handler::bit_and_int_mixture_handler(max_display_length));
+  }
   return false;
 }
 
@@ -1795,7 +2029,7 @@ Type_collection_std::aggregate_for_num_op(const Type_handler *h0,
     return &type_handler_newdecimal;
 
   DBUG_ASSERT(r0 == INT_RESULT && r1 == INT_RESULT);
-  return &type_handler_longlong;
+  return &type_handler_slonglong;
 }
 
 
@@ -1840,11 +2074,11 @@ Type_handler::get_handler_by_field_type(enum_field_types type)
   switch (type) {
   case MYSQL_TYPE_DECIMAL:     return &type_handler_olddecimal;
   case MYSQL_TYPE_NEWDECIMAL:  return &type_handler_newdecimal;
-  case MYSQL_TYPE_TINY:        return &type_handler_tiny;
-  case MYSQL_TYPE_SHORT:       return &type_handler_short;
-  case MYSQL_TYPE_LONG:        return &type_handler_long;
-  case MYSQL_TYPE_LONGLONG:    return &type_handler_longlong;
-  case MYSQL_TYPE_INT24:       return &type_handler_int24;
+  case MYSQL_TYPE_TINY:        return &type_handler_stiny;
+  case MYSQL_TYPE_SHORT:       return &type_handler_sshort;
+  case MYSQL_TYPE_LONG:        return &type_handler_slong;
+  case MYSQL_TYPE_LONGLONG:    return &type_handler_slonglong;
+  case MYSQL_TYPE_INT24:       return &type_handler_sint24;
   case MYSQL_TYPE_YEAR:        return &type_handler_year;
   case MYSQL_TYPE_BIT:         return &type_handler_bit;
   case MYSQL_TYPE_FLOAT:       return &type_handler_float;
@@ -1895,11 +2129,11 @@ Type_handler::get_handler_by_real_type(enum_field_types type)
   switch (type) {
   case MYSQL_TYPE_DECIMAL:     return &type_handler_olddecimal;
   case MYSQL_TYPE_NEWDECIMAL:  return &type_handler_newdecimal;
-  case MYSQL_TYPE_TINY:        return &type_handler_tiny;
-  case MYSQL_TYPE_SHORT:       return &type_handler_short;
-  case MYSQL_TYPE_LONG:        return &type_handler_long;
-  case MYSQL_TYPE_LONGLONG:    return &type_handler_longlong;
-  case MYSQL_TYPE_INT24:       return &type_handler_int24;
+  case MYSQL_TYPE_TINY:        return &type_handler_stiny;
+  case MYSQL_TYPE_SHORT:       return &type_handler_sshort;
+  case MYSQL_TYPE_LONG:        return &type_handler_slong;
+  case MYSQL_TYPE_LONGLONG:    return &type_handler_slonglong;
+  case MYSQL_TYPE_INT24:       return &type_handler_sint24;
   case MYSQL_TYPE_YEAR:        return &type_handler_year;
   case MYSQL_TYPE_BIT:         return &type_handler_bit;
   case MYSQL_TYPE_FLOAT:       return &type_handler_float;
@@ -2276,6 +2510,7 @@ Field *Type_handler_varchar::make_conversion_table_field(MEM_ROOT *root,
                                                          const Field *target)
                                                          const
 {
+  DBUG_ASSERT(HA_VARCHAR_PACKLENGTH(metadata) <= MAX_FIELD_VARCHARLENGTH);
   return new(root)
          Field_varstring(NULL, metadata, HA_VARCHAR_PACKLENGTH(metadata),
                          (uchar *) "", 1, Field::NONE, &empty_clex_str,
@@ -3043,6 +3278,7 @@ Field *Type_handler_tiny::make_table_field(MEM_ROOT *root,
                                            const Type_all_attributes &attr,
                                            TABLE *table) const
 {
+  DBUG_ASSERT(is_unsigned() == attr.unsigned_flag);
   return new (root)
          Field_tiny(addr.ptr(), attr.max_char_length(),
                     addr.null_ptr(), addr.null_bit(),
@@ -3057,6 +3293,7 @@ Field *Type_handler_short::make_table_field(MEM_ROOT *root,
                                             TABLE *table) const
 
 {
+  DBUG_ASSERT(is_unsigned() == attr.unsigned_flag);
   return new (root)
          Field_short(addr.ptr(), attr.max_char_length(),
                      addr.null_ptr(), addr.null_bit(),
@@ -3070,6 +3307,7 @@ Field *Type_handler_int24::make_table_field(MEM_ROOT *root,
                                             const Type_all_attributes &attr,
                                             TABLE *table) const
 {
+  DBUG_ASSERT(is_unsigned() == attr.unsigned_flag);
   return new (root)
          Field_medium(addr.ptr(), attr.max_char_length(),
                       addr.null_ptr(), addr.null_bit(),
@@ -3084,6 +3322,7 @@ Field *Type_handler_long::make_table_field(MEM_ROOT *root,
                                            const Type_all_attributes &attr,
                                            TABLE *table) const
 {
+  DBUG_ASSERT(is_unsigned() == attr.unsigned_flag);
   return new (root)
          Field_long(addr.ptr(), attr.max_char_length(),
                     addr.null_ptr(), addr.null_bit(),
@@ -3097,6 +3336,7 @@ Field *Type_handler_longlong::make_table_field(MEM_ROOT *root,
                                                const Type_all_attributes &attr,
                                                TABLE *table) const
 {
+  DBUG_ASSERT(is_unsigned() == attr.unsigned_flag);
   return new (root)
          Field_longlong(addr.ptr(), attr.max_char_length(),
                         addr.null_ptr(), addr.null_bit(),
@@ -3111,6 +3351,7 @@ Field *Type_handler_vers_trx_id::make_table_field(MEM_ROOT *root,
                                                const Type_all_attributes &attr,
                                                TABLE *table) const
 {
+  DBUG_ASSERT(is_unsigned() == attr.unsigned_flag);
   return new (root)
          Field_vers_trx_id(addr.ptr(), attr.max_char_length(),
                         addr.null_ptr(), addr.null_bit(),
@@ -3400,6 +3641,8 @@ Field *Type_handler_varchar::make_table_field(MEM_ROOT *root,
                                               TABLE *table) const
 
 {
+  DBUG_ASSERT(HA_VARCHAR_PACKLENGTH(attr.max_length) <=
+              MAX_FIELD_VARCHARLENGTH);
   return new (root)
          Field_varstring(addr.ptr(), attr.max_length,
                          HA_VARCHAR_PACKLENGTH(attr.max_length),
@@ -3746,13 +3989,6 @@ uint32 Type_handler_year::max_display_length(const Item *item) const
 uint32 Type_handler_bit::max_display_length(const Item *item) const
 {
   return item->max_length;
-}
-
-
-uint32 Type_handler_general_purpose_int::max_display_length(const Item *item)
-                                                            const
-{
-  return type_limits_int_by_unsigned_flag(item->unsigned_flag)->char_length();
 }
 
 
@@ -4108,11 +4344,14 @@ bool Type_handler_int_result::
     {
       // Convert a mixture of signed and unsigned int to decimal
       handler->set_handler(&type_handler_newdecimal);
-      func->aggregate_attributes_decimal(items, nitems);
+      func->aggregate_attributes_decimal(items, nitems, false);
       return false;
     }
   }
   func->aggregate_attributes_int(items, nitems);
+  handler->set_handler(func->unsigned_flag ?
+                       handler->type_handler()->type_handler_unsigned() :
+                       handler->type_handler()->type_handler_signed());
   return false;
 }
 
@@ -4136,7 +4375,8 @@ bool Type_handler_decimal_result::
                                        Type_all_attributes *func,
                                        Item **items, uint nitems) const
 {
-  func->aggregate_attributes_decimal(items, nitems);
+  uint unsigned_count= func->count_unsigned(items, nitems);
+  func->aggregate_attributes_decimal(items, nitems, unsigned_count == nitems);
   return false;
 }
 
@@ -4381,53 +4621,32 @@ bool Type_handler_real_result::
 
 /*************************************************************************/
 
-/**
-  MAX/MIN for the traditional numeric types preserve the exact data type
-  from Fields, but do not preserve the exact type from Items:
-    MAX(float_field)              -> FLOAT
-    MAX(smallint_field)           -> LONGLONG
-    MAX(COALESCE(float_field))    -> DOUBLE
-    MAX(COALESCE(smallint_field)) -> LONGLONG
-  QQ: Items should probably be fixed to preserve the exact type.
-*/
-bool Type_handler_numeric::
-       Item_sum_hybrid_fix_length_and_dec_numeric(Item_sum_hybrid *func,
-                                                  const Type_handler *handler)
-                                                  const
-{
-  Item *item= func->arguments()[0];
-  Item *item2= item->real_item();
-  func->Type_std_attributes::set(item);
-  /* MIN/MAX can return NULL for empty set indepedent of the used column */
-  func->maybe_null= func->null_value= true;
-  if (item2->type() == Item::FIELD_ITEM)
-    func->set_handler(item2->type_handler());
-  else
-    func->set_handler(handler);
-  return false;
-}
-
-
 bool Type_handler_int_result::
        Item_sum_hybrid_fix_length_and_dec(Item_sum_hybrid *func) const
 {
-  return Item_sum_hybrid_fix_length_and_dec_numeric(func,
-                                                    &type_handler_longlong);
+  /*
+    "this" is equal func->args[0]->type_handler() here, e.g. for MIN()/MAX().
+    func->unsigned_flag is not reliably set yet.
+    It will be set by the call below (copied from args[0]).
+  */
+  const Type_handler *h= is_unsigned() ?
+                         &type_handler_ulonglong :
+                         &type_handler_slonglong;
+  return func->fix_length_and_dec_numeric(h);
 }
 
 
 bool Type_handler_bool::
        Item_sum_hybrid_fix_length_and_dec(Item_sum_hybrid *func) const
 {
-  return Item_sum_hybrid_fix_length_and_dec_numeric(func, &type_handler_bool);
+  return func->fix_length_and_dec_numeric(&type_handler_bool);
 }
 
 
 bool Type_handler_real_result::
        Item_sum_hybrid_fix_length_and_dec(Item_sum_hybrid *func) const
 {
-  (void) Item_sum_hybrid_fix_length_and_dec_numeric(func,
-                                                    &type_handler_double);
+  (void) func->fix_length_and_dec_numeric(&type_handler_double);
   func->max_length= func->float_length(func->decimals);
   return false;
 }
@@ -4436,53 +4655,21 @@ bool Type_handler_real_result::
 bool Type_handler_decimal_result::
        Item_sum_hybrid_fix_length_and_dec(Item_sum_hybrid *func) const
 {
-  return Item_sum_hybrid_fix_length_and_dec_numeric(func,
-                                                    &type_handler_newdecimal);
+  return func->fix_length_and_dec_numeric(&type_handler_newdecimal);
 }
 
 
-/**
-   MAX(str_field) converts ENUM/SET to CHAR, and preserve all other types
-   for Fields.
-   QQ: This works differently from UNION, which preserve the exact data
-   type for ENUM/SET if the joined ENUM/SET fields are equally defined.
-   Perhaps should be fixed.
-   MAX(str_item) chooses the best suitable string type.
-*/
 bool Type_handler_string_result::
        Item_sum_hybrid_fix_length_and_dec(Item_sum_hybrid *func) const
 {
-  Item *item= func->arguments()[0];
-  Item *item2= item->real_item();
-  func->Type_std_attributes::set(item);
-  func->maybe_null= func->null_value= true;
-  if (item2->type() == Item::FIELD_ITEM)
-  {
-    // Fields: convert ENUM/SET to CHAR, preserve the type otherwise.
-    func->set_handler(item->type_handler());
-  }
-  else
-  {
-    // Items: choose VARCHAR/BLOB/MEDIUMBLOB/LONGBLOB, depending on length.
-    func->set_handler(type_handler_varchar.
-          type_handler_adjusted_to_max_octet_length(func->max_length,
-                                                    func->collation.collation));
-  }
-  return false;
+  return func->fix_length_and_dec_string();
 }
 
 
-/**
-  Traditional temporal types always preserve the type of the argument.
-*/
 bool Type_handler_temporal_result::
        Item_sum_hybrid_fix_length_and_dec(Item_sum_hybrid *func) const
 {
-  Item *item= func->arguments()[0];
-  func->Type_std_attributes::set(item);
-  func->maybe_null= func->null_value= true;
-  func->set_handler(item->type_handler());
-  return false;
+  return func->fix_length_and_dec_generic();
 }
 
 
@@ -7944,14 +8131,14 @@ Type_handler_temporal_result::Item_const_eq(const Item_const *a,
 const Type_handler *
 Type_handler_hex_hybrid::cast_to_int_type_handler() const
 {
-  return &type_handler_longlong;
+  return &type_handler_ulonglong;
 }
 
 
 const Type_handler *
 Type_handler_hex_hybrid::type_handler_for_system_time() const
 {
-  return &type_handler_longlong;
+  return &type_handler_ulonglong;
 }
 
 

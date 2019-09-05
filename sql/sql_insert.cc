@@ -1061,6 +1061,7 @@ bool mysql_insert(THD *thd,TABLE_LIST *table_list,
         break;
       }
 
+      thd->decide_logging_format_low(table);
 #ifndef EMBEDDED_LIBRARY
       if (lock_type == TL_WRITE_DELAYED)
       {
@@ -4065,8 +4066,12 @@ void select_insert::abort_result_set() {
     example), no table will have been opened and therefore 'table'
     will be NULL. In that case, we still need to execute the rollback
     and the end of the function.
+
+    If it fail due to inability to insert in multi-table view for example,
+    table will be assigned with view table structure, but that table will
+    not be opened really (it is dummy to check fields types & Co).
    */
-  if (table)
+  if (table && table->file->get_table())
   {
     bool changed, transactional_table;
     /*

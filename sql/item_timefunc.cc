@@ -1220,7 +1220,7 @@ bool Item_func_unix_timestamp::get_timestamp_value(my_time_t *seconds,
   Timestamp_or_zero_datetime_native_null native(current_thd, args[0], true);
   if ((null_value= native.is_null() || native.is_zero_datetime()))
     return true;
-  Timestamp_or_zero_datetime tm(native);
+  Timestamp tm(native);
   *seconds= tm.tv().tv_sec;
   *second_part= tm.tv().tv_usec;
   return false;
@@ -1920,7 +1920,10 @@ bool Item_func_from_unixtime::fix_length_and_dec()
   THD *thd= current_thd;
   thd->time_zone_used= 1;
   tz= thd->variables.time_zone;
-  fix_attributes_datetime_not_fixed_dec(args[0]->decimals);
+  Type_std_attributes::set(
+    Type_temporal_attributes_not_fixed_dec(MAX_DATETIME_WIDTH,
+                                           args[0]->decimals, false),
+    DTCollation_numeric());
   maybe_null= true;
   return FALSE;
 }
@@ -2001,7 +2004,7 @@ bool Item_date_add_interval::fix_length_and_dec()
 {
   enum_field_types arg0_field_type;
 
-  if (!args[0]->type_handler()->is_traditional_type())
+  if (!args[0]->type_handler()->is_traditional_scalar_type())
   {
     my_error(ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION, MYF(0),
              args[0]->type_handler()->name().ptr(),
@@ -2505,8 +2508,8 @@ bool Item_func_add_time::fix_length_and_dec()
 {
   enum_field_types arg0_field_type;
 
-  if (!args[0]->type_handler()->is_traditional_type() ||
-      !args[1]->type_handler()->is_traditional_type())
+  if (!args[0]->type_handler()->is_traditional_scalar_type() ||
+      !args[1]->type_handler()->is_traditional_scalar_type())
   {
     my_error(ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION, MYF(0),
              args[0]->type_handler()->name().ptr(),
@@ -2916,8 +2919,8 @@ get_date_time_result_type(const char *format, uint length)
 
 bool Item_func_str_to_date::fix_length_and_dec()
 {
-  if (!args[0]->type_handler()->is_traditional_type() ||
-      !args[1]->type_handler()->is_traditional_type())
+  if (!args[0]->type_handler()->is_traditional_scalar_type() ||
+      !args[1]->type_handler()->is_traditional_scalar_type())
   {
     my_error(ER_ILLEGAL_PARAMETER_DATA_TYPES2_FOR_OPERATION, MYF(0),
              args[0]->type_handler()->name().ptr(),

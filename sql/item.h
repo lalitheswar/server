@@ -2,7 +2,7 @@
 #define SQL_ITEM_INCLUDED
 
 /* Copyright (c) 2000, 2017, Oracle and/or its affiliates.
-   Copyright (c) 2009, 2018, MariaDB Corporation
+   Copyright (c) 2009, 2019, MariaDB Corporation.
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -719,7 +719,6 @@ public:
 class Item: public Value_source,
             public Type_all_attributes
 {
-  void operator=(Item &);
   /**
     The index in the JOIN::join_tab array of the JOIN_TAB this Item is attached
     to. Items are attached (or 'pushed') to JOIN_TABs during optimization by the
@@ -2012,6 +2011,44 @@ public:
   virtual bool check_index_dependence(void *arg) { return 0; }
   /*============== End of Item processor list ======================*/
 
+  /*
+    Given a condition P from the WHERE clause or from an ON expression of
+    the processed SELECT S and a set of join tables from S marked in the
+    parameter 'allowed'={T} a call of P->find_not_null_fields({T}) has to
+    find the set fields {F} of the tables from 'allowed' such that:
+    - each field from {F} is declared as nullable
+    - each record of table t from {T} that contains NULL as the value for at
+      at least one field from {F} can be ignored when building the result set
+      for S
+    It is assumed here that the condition P is conjunctive and all its column
+    references belong to T.
+
+    Examples:
+      CREATE TABLE t1 (a int, b int);
+      CREATE TABLE t2 (a int, b int);
+
+      SELECT * FROM t1,t2 WHERE t1.a=t2.a and t1.b > 5;
+      A call of find_not_null_fields() for the whole WHERE condition and {t1,t2}
+      should find {t1.a,t1.b,t2.a}
+
+      SELECT * FROM t1 LEFT JOIN ON (t1.a=t2.a and t2.a > t2.b);
+      A call of find_not_null_fields() for the ON expression and {t2}
+      should find {t2.a,t2.b}
+
+    The function returns TRUE if it succeeds to prove that all records of
+    a table from {T} can be ignored. Otherwise it always returns FALSE.
+
+    Example:
+      SELECT * FROM t1,t2 WHERE t1.a=t2.a AND t2.a IS NULL;
+    A call of find_not_null_fields() for the WHERE condition and {t1,t2}
+    will return TRUE.
+
+    It is assumed that the implementation of this virtual function saves
+    the info on the found set of fields in the structures associates with
+    tables from {T}.
+  */
+  virtual bool find_not_null_fields(table_map allowed) { return false; }
+
   virtual Item *get_copy(THD *thd)=0;
 
   bool cache_const_expr_analyzer(uchar **arg);
@@ -2076,7 +2113,8 @@ public:
 
   const Type_handler *type_handler_long_or_longlong() const
   {
-    return Type_handler::type_handler_long_or_longlong(max_char_length());
+    return Type_handler::type_handler_long_or_longlong(max_char_length(),
+                                                       unsigned_flag);
   }
 
   /**
@@ -2360,6 +2398,9 @@ public:
     append(item->type_handler()->name().ptr());
     append(')');
     const_cast<Item*>(item)->print(this, QT_EXPLAIN);
+    /* Append end \0 to allow usage of c_ptr() */
+    append('\0');
+    str_length--;
   }
 };
 #endif
@@ -3087,7 +3128,7 @@ public:
 class Item_num: public Item_literal
 {
 public:
-  Item_num(THD *thd): Item_literal(thd) { collation.set_numeric(); }
+  Item_num(THD *thd): Item_literal(thd) { collation= DTCollation_numeric(); }
   Item *safe_charset_converter(THD *thd, CHARSET_INFO *tocs);
   bool get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
   {
@@ -3353,6 +3394,7 @@ public:
   bool is_result_field() { return false; }
   void save_in_result_field(bool no_conversions);
   Item *get_tmp_table_item(THD *thd);
+  bool find_not_null_fields(table_map allowed);
   bool collect_item_field_processor(void * arg);
   bool add_field_to_set_processor(void * arg);
   bool find_item_in_field_list_processor(void *arg);
@@ -3894,7 +3936,7 @@ public:
 
   bool set_limit_clause_param(longlong nr)
   {
-    value.set_handler(&type_handler_longlong);
+    value.set_handler(&type_handler_slonglong);
     set_int(nr, MY_INT64_NUM_DECIMAL_DIGITS);
     return !unsigned_flag && value.integer < 0;
   }
@@ -4473,7 +4515,9 @@ public:
   }
   const Type_handler *type_handler() const
   {
-    return Type_handler::get_handler_by_field_type(int_field_type);
+    const Type_handler *h=
+      Type_handler::get_handler_by_field_type(int_field_type);
+    return unsigned_flag ? h->type_handler_unsigned() : h;
   }
 };
 
@@ -4653,14 +4697,14 @@ public:
   Item_temporal_literal(THD *thd, const MYSQL_TIME *ltime)
    :Item_literal(thd)
   {
-    collation.set(&my_charset_numeric, DERIVATION_NUMERIC, MY_REPERTOIRE_ASCII);
+    collation= DTCollation_numeric();
     decimals= 0;
     cached_time= *ltime;
   }
   Item_temporal_literal(THD *thd, const MYSQL_TIME *ltime, uint dec_arg):
     Item_literal(thd)
   {
-    collation.set(&my_charset_numeric, DERIVATION_NUMERIC, MY_REPERTOIRE_ASCII);
+    collation= DTCollation_numeric();
     decimals= dec_arg;
     cached_time= *ltime;
   }
@@ -5146,6 +5190,10 @@ public:
   { 
     return depended_from ? 0 : (*ref)->not_null_tables();
   }
+  bool find_not_null_fields(table_map allowed)
+  {
+    return depended_from ? false : (*ref)->find_not_null_fields(allowed);
+  }
   void save_in_result_field(bool no_conversions)
   {
     (*ref)->save_in_field(result_field, no_conversions);
@@ -5559,6 +5607,7 @@ public:
   void update_used_tables();
   table_map not_null_tables() const;
   bool const_item() const { return used_tables() == 0; }
+  TABLE *get_null_ref_table() const { return null_ref_table; }
   bool walk(Item_processor processor, bool walk_subquery, void *arg)
   { 
     return (*ref)->walk(processor, walk_subquery, arg) ||
@@ -6498,8 +6547,6 @@ class Item_cache_int: public Item_cache
 protected:
   longlong value;
 public:
-  Item_cache_int(THD *thd): Item_cache(thd, &type_handler_longlong),
-    value(0) {}
   Item_cache_int(THD *thd, const Type_handler *handler):
     Item_cache(thd, handler), value(0) {}
 

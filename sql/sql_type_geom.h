@@ -136,7 +136,6 @@ public:
   bool can_return_text() const override { return false; }
   bool can_return_date() const override { return false; }
   bool can_return_time() const override { return false; }
-  bool is_traditional_type() const override { return false; }
   bool Item_func_round_fix_length_and_dec(Item_func_round *) const override;
   bool Item_func_int_val_fix_length_and_dec(Item_func_int_val *) const override;
   bool Item_func_abs_fix_length_and_dec(Item_func_abs *) const override;
@@ -200,8 +199,8 @@ class Type_handler_linestring: public Type_handler_geometry
 {
   static const Name m_name_linestring;
 public:
-  geometry_types geometry_type() const { return GEOM_LINESTRING; }
-  const Name name() const { return m_name_linestring; }
+  geometry_types geometry_type() const override { return GEOM_LINESTRING; }
+  const Name name() const override { return m_name_linestring; }
   Item *make_constructor_item(THD *thd, List<Item> *args) const override;
 };
 
@@ -210,8 +209,8 @@ class Type_handler_polygon: public Type_handler_geometry
 {
   static const Name m_name_polygon;
 public:
-  geometry_types geometry_type() const { return GEOM_POLYGON; }
-  const Name name() const { return m_name_polygon; }
+  geometry_types geometry_type() const override { return GEOM_POLYGON; }
+  const Name name() const override { return m_name_polygon; }
   Item *make_constructor_item(THD *thd, List<Item> *args) const override;
 };
 
@@ -220,8 +219,8 @@ class Type_handler_multipoint: public Type_handler_geometry
 {
   static const Name m_name_multipoint;
 public:
-  geometry_types geometry_type() const { return GEOM_MULTIPOINT; }
-  const Name name() const { return m_name_multipoint; }
+  geometry_types geometry_type() const override { return GEOM_MULTIPOINT; }
+  const Name name() const override { return m_name_multipoint; }
   Item *make_constructor_item(THD *thd, List<Item> *args) const override;
 };
 
@@ -230,8 +229,8 @@ class Type_handler_multilinestring: public Type_handler_geometry
 {
   static const Name m_name_multilinestring;
 public:
-  geometry_types geometry_type() const { return GEOM_MULTILINESTRING; }
-  const Name name() const { return m_name_multilinestring; }
+  geometry_types geometry_type() const override { return GEOM_MULTILINESTRING; }
+  const Name name() const override { return m_name_multilinestring; }
   Item *make_constructor_item(THD *thd, List<Item> *args) const override;
 };
 
@@ -240,8 +239,8 @@ class Type_handler_multipolygon: public Type_handler_geometry
 {
   static const Name m_name_multipolygon;
 public:
-  geometry_types geometry_type() const { return GEOM_MULTIPOLYGON; }
-  const Name name() const { return m_name_multipolygon; }
+  geometry_types geometry_type() const override { return GEOM_MULTIPOLYGON; }
+  const Name name() const override { return m_name_multipolygon; }
   Item *make_constructor_item(THD *thd, List<Item> *args) const override;
 };
 
@@ -250,8 +249,8 @@ class Type_handler_geometrycollection: public Type_handler_geometry
 {
   static const Name m_name_geometrycollection;
 public:
-  geometry_types geometry_type() const { return GEOM_GEOMETRYCOLLECTION; }
-  const Name name() const { return m_name_geometrycollection; }
+  geometry_types geometry_type() const override { return GEOM_GEOMETRYCOLLECTION; }
+  const Name name() const override { return m_name_geometrycollection; }
   Item *make_constructor_item(THD *thd, List<Item> *args) const override;
 };
 
@@ -347,9 +346,12 @@ public:
   { srid= field_srid; }
   enum_conv_type rpl_conv_type_from(const Conv_source &source,
                                     const Relay_log_info *rli,
-                                    const Conv_param &param) const;
-  enum ha_base_keytype key_type() const { return HA_KEYTYPE_VARBINARY2; }
-  const Type_handler *type_handler() const
+                                    const Conv_param &param) const override;
+  enum ha_base_keytype key_type() const  override
+  {
+    return HA_KEYTYPE_VARBINARY2;
+  }
+  const Type_handler *type_handler() const override
   {
     return m_type_handler;
   }
@@ -361,28 +363,28 @@ public:
   {
     m_type_handler= th;
   }
-  enum_field_types type() const
+  enum_field_types type() const override
   {
     return MYSQL_TYPE_GEOMETRY;
   }
-  enum_field_types real_type() const
+  enum_field_types real_type() const override
   {
     return MYSQL_TYPE_GEOMETRY;
   }
   Information_schema_character_attributes
-    information_schema_character_attributes() const
+    information_schema_character_attributes() const override
   {
     return Information_schema_character_attributes();
   }
-  void make_send_field(Send_field *to)
+  void make_send_field(Send_field *to) override
   {
     Field_longstr::make_send_field(to);
   }
   bool can_optimize_range(const Item_bool_func *cond,
                                   const Item *item,
-                                  bool is_eq_func) const;
-  void sql_type(String &str) const;
-  Copy_func *get_copy_func(const Field *from) const
+                                  bool is_eq_func) const override;
+  void sql_type(String &str) const override;
+  Copy_func *get_copy_func(const Field *from) const override
   {
     const Type_handler_geometry *fth=
       dynamic_cast<const Type_handler_geometry*>(from->type_handler());
@@ -390,7 +392,7 @@ public:
       return get_identical_copy_func();
     return do_conv_blob;
   }
-  bool memcpy_field_possible(const Field *from) const
+  bool memcpy_field_possible(const Field *from) const override
   {
     const Type_handler_geometry *fth=
       dynamic_cast<const Type_handler_geometry*>(from->type_handler());
@@ -398,17 +400,18 @@ public:
            m_type_handler->is_binary_compatible_geom_super_type_for(fth) &&
            !table->copy_blobs;
   }
-  bool is_equal(const Column_definition &new_field) const;
-  bool can_be_converted_by_engine(const Column_definition &new_type) const
+  bool is_equal(const Column_definition &new_field) const override;
+  bool can_be_converted_by_engine(const Column_definition &new_type)
+                                  const override
   {
     return false; // Override the Field_blob behavior
   }
 
-  int  store(const char *to, size_t length, CHARSET_INFO *charset);
-  int  store(double nr);
-  int  store(longlong nr, bool unsigned_val);
-  int  store_decimal(const my_decimal *);
-  uint size_of() const { return sizeof(*this); }
+  int  store(const char *to, size_t length, CHARSET_INFO *charset) override;
+  int  store(double nr) override;
+  int  store(longlong nr, bool unsigned_val) override;
+  int  store_decimal(const my_decimal *) override;
+  uint size_of() const  override{ return sizeof(*this); }
   /**
    Key length is provided only to support hash joins. (compared byte for byte)
    Ex: SELECT .. FROM t1,t2 WHERE t1.field_geom1=t2.field_geom2.
@@ -416,19 +419,19 @@ public:
    The comparison is not very relevant, as identical geometry might be
    represented differently, but we need to support it either way.
   */
-  uint32 key_length() const { return packlength; }
-  uint get_key_image(uchar *buff,uint length, imagetype type_arg);
+  uint32 key_length() const  override{ return packlength; }
+  uint get_key_image(uchar *buff,uint length, imagetype type_arg) override;
 
   /**
     Non-nullable GEOMETRY types cannot have defaults,
     but the underlying blob must still be reset.
    */
-  int reset(void) { return Field_blob::reset() || !maybe_null(); }
-  bool load_data_set_null(THD *thd);
-  bool load_data_set_no_data(THD *thd, bool fixed_format);
+  int reset(void)  override{ return Field_blob::reset() || !maybe_null(); }
+  bool load_data_set_null(THD *thd) override;
+  bool load_data_set_no_data(THD *thd, bool fixed_format) override;
 
   uint get_srid() const { return srid; }
-  void print_key_value(String *out, uint32 length)
+  void print_key_value(String *out, uint32 length) override
   {
     out->append(STRING_WITH_LEN("unprintable_geometry_value"));
   }

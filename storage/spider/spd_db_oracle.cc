@@ -588,16 +588,16 @@ int spider_db_oracle_row::init()
   if (
     !(ind = (sb2 *)
       spider_bulk_malloc(spider_current_trx, 161, MYF(MY_WME | MY_ZEROFILL),
-        &ind, sizeof(sb2) * field_count,
-        &rlen, sizeof(ub2) * field_count,
-        &coltp, sizeof(ub2) * field_count,
-        &colsz, sizeof(ub2) * field_count,
-        &row_size, sizeof(ulong) * field_count,
-        &val, sizeof(char *) * field_count,
-        &tmp_val, MAX_FIELD_WIDTH * field_count,
-        &defnp, sizeof(OCIDefine *) * field_count,
-        &lobhp, sizeof(OCILobLocator *) * field_count,
-        &colhp, sizeof(OCIParam *) * field_count,
+        &ind, (uint) (sizeof(sb2) * field_count),
+        &rlen, (uint) (sizeof(ub2) * field_count),
+        &coltp, (uint) (sizeof(ub2) * field_count),
+        &colsz, (uint) (sizeof(ub2) * field_count),
+        &row_size, (uint) (sizeof(ulong) * field_count),
+        &val, (uint) (sizeof(char *) * field_count),
+        &tmp_val, (uint) (MAX_FIELD_WIDTH * field_count),
+        &defnp, (uint) (sizeof(OCIDefine *) * field_count),
+        &lobhp, (uint) (sizeof(OCILobLocator *) * field_count),
+        &colhp, (uint) (sizeof(OCIParam *) * field_count),
         NullS)
     ) ||
     !(val_str = new spider_string[field_count])
@@ -2113,6 +2113,23 @@ int spider_db_oracle::set_wait_timeout(
   DBUG_RETURN(0);
 }
 
+bool spider_db_oracle::set_sql_mode_in_bulk_sql()
+{
+  DBUG_ENTER("spider_db_oracle::set_sql_mode_in_bulk_sql");
+  DBUG_PRINT("info",("spider this=%p", this));
+  DBUG_RETURN(FALSE);
+}
+
+int spider_db_oracle::set_sql_mode(
+  sql_mode_t sql_mode,
+  int *need_mon
+) {
+  DBUG_ENTER("spider_db_oracle::set_sql_mode");
+  DBUG_PRINT("info",("spider this=%p", this));
+  /* nothing to do */
+  DBUG_RETURN(0);
+}
+
 bool spider_db_oracle::set_time_zone_in_bulk_sql()
 {
   DBUG_ENTER("spider_db_oracle::set_time_zone_in_bulk_sql");
@@ -2528,6 +2545,57 @@ int spider_db_oracle_util::append_name_with_charset(
   DBUG_RETURN(0);
 }
 
+int spider_db_oracle_util::append_escaped_name(
+  spider_string *str,
+  const char *name,
+  uint name_length
+) {
+  int error_num;
+  DBUG_ENTER("spider_db_oracle_util::append_name");
+  if (str->reserve(SPIDER_SQL_NAME_QUOTE_LEN * 2 + name_length * 2))
+  {
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  }
+  str->q_append(SPIDER_SQL_NAME_QUOTE_STR, SPIDER_SQL_NAME_QUOTE_LEN);
+  if ((error_num = spider_db_append_name_with_quote_str_internal(
+    str, name, name_length, dbton_id)))
+  {
+    DBUG_RETURN(error_num);
+  }
+  if (str->reserve(SPIDER_SQL_NAME_QUOTE_LEN))
+  {
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  }
+  str->q_append(SPIDER_SQL_NAME_QUOTE_STR, SPIDER_SQL_NAME_QUOTE_LEN);
+  DBUG_RETURN(0);
+}
+
+int spider_db_oracle_util::append_escaped_name_with_charset(
+  spider_string *str,
+  const char *name,
+  uint name_length,
+  CHARSET_INFO *name_charset
+) {
+  int error_num;
+  DBUG_ENTER("spider_db_oracle_util::append_name_with_charset");
+  if (str->reserve(SPIDER_SQL_NAME_QUOTE_LEN * 2 + name_length * 2))
+  {
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  }
+  str->q_append(SPIDER_SQL_NAME_QUOTE_STR, SPIDER_SQL_NAME_QUOTE_LEN);
+  if ((error_num = spider_db_append_name_with_quote_str_internal(
+    str, name, name_length, name_charset, dbton_id)))
+  {
+    DBUG_RETURN(error_num);
+  }
+  if (str->reserve(SPIDER_SQL_NAME_QUOTE_LEN))
+  {
+    DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+  }
+  str->q_append(SPIDER_SQL_NAME_QUOTE_STR, SPIDER_SQL_NAME_QUOTE_LEN);
+  DBUG_RETURN(0);
+}
+
 bool spider_db_oracle_util::is_name_quote(
   const char head_code
 ) {
@@ -2824,6 +2892,16 @@ int spider_db_oracle_util::append_wait_timeout(
   int wait_timeout
 ) {
   DBUG_ENTER("spider_db_oracle_util::append_wait_timeout");
+  DBUG_PRINT("info",("spider this=%p", this));
+  /* nothing to do */
+  DBUG_RETURN(0);
+}
+
+int spider_db_oracle_util::append_sql_mode(
+  spider_string *str,
+  sql_mode_t sql_mode
+) {
+  DBUG_ENTER("spider_db_oracle_util::append_sql_mode");
   DBUG_PRINT("info",("spider this=%p", this));
   /* nothing to do */
   DBUG_RETURN(0);
@@ -12519,7 +12597,7 @@ int spider_oracle_handler::init_union_table_name_pos()
   if (!union_table_name_pos_first)
   {
     if (!spider_bulk_malloc(spider_current_trx, 238, MYF(MY_WME),
-      &union_table_name_pos_first, sizeof(SPIDER_INT_HLD),
+      &union_table_name_pos_first, (uint) (sizeof(SPIDER_INT_HLD)),
       NullS)
     ) {
       DBUG_RETURN(HA_ERR_OUT_OF_MEM);
@@ -12540,7 +12618,7 @@ int spider_oracle_handler::set_union_table_name_pos()
     if (!union_table_name_pos_current->next)
     {
       if (!spider_bulk_malloc(spider_current_trx, 239, MYF(MY_WME),
-        &union_table_name_pos_current->next, sizeof(SPIDER_INT_HLD),
+        &union_table_name_pos_current->next, (uint) (sizeof(SPIDER_INT_HLD)),
         NullS)
       ) {
         DBUG_RETURN(HA_ERR_OUT_OF_MEM);
@@ -12757,7 +12835,7 @@ int spider_oracle_handler::append_list_item_select(
     ))
       DBUG_RETURN(HA_ERR_OUT_OF_MEM);
     str->q_append(SPIDER_SQL_SPACE_STR, SPIDER_SQL_SPACE_LEN);
-    if ((error_num = spider_db_oracle_utility.append_name(str,
+    if ((error_num = spider_db_oracle_utility.append_escaped_name(str,
       item_name, length)))
     {
       DBUG_RETURN(error_num);

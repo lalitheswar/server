@@ -192,8 +192,6 @@ public:
   { return tmp_table_field_from_field_type(root, table); }
   Item *get_tmp_table_item(THD *thd);
 
-  my_decimal *val_decimal(my_decimal *);
-
   void fix_char_length_ulonglong(ulonglong max_char_length_arg)
   {
     ulonglong max_result_length= max_char_length_arg *
@@ -212,6 +210,7 @@ public:
   void traverse_cond(Cond_traverser traverser,
                      void * arg, traverse_order order);
   bool eval_not_null_tables(void *opt_arg);
+  bool find_not_null_fields(table_map allowed);
  // bool is_expensive_processor(void *arg);
  // virtual bool is_expensive() { return 0; }
   inline void raise_numeric_overflow(const char *type_name)
@@ -406,13 +405,13 @@ public:
 class Item_real_func :public Item_func
 {
 public:
-  Item_real_func(THD *thd): Item_func(thd) { collation.set_numeric(); }
+  Item_real_func(THD *thd): Item_func(thd) { collation= DTCollation_numeric(); }
   Item_real_func(THD *thd, Item *a): Item_func(thd, a)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   Item_real_func(THD *thd, Item *a, Item *b): Item_func(thd, a, b)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   Item_real_func(THD *thd, List<Item> &list): Item_func(thd, list)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   String *val_str(String*str);
   my_decimal *val_decimal(my_decimal *decimal_value);
   longlong val_int()
@@ -723,19 +722,19 @@ public:
 public:
   Item_func_hybrid_field_type(THD *thd):
     Item_hybrid_func(thd)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   Item_func_hybrid_field_type(THD *thd, Item *a):
     Item_hybrid_func(thd, a)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   Item_func_hybrid_field_type(THD *thd, Item *a, Item *b):
     Item_hybrid_func(thd, a, b)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   Item_func_hybrid_field_type(THD *thd, Item *a, Item *b, Item *c):
     Item_hybrid_func(thd, a, b, c)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   Item_func_hybrid_field_type(THD *thd, List<Item> &list):
     Item_hybrid_func(thd, list)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
 
   double val_real()
   {
@@ -875,6 +874,7 @@ public:
   Item_func_case_expression(THD *thd, List<Item> &list):
     Item_func_hybrid_field_type(thd, list)
   { }
+  bool find_not_null_fields(table_map allowed) { return false; }
 };
 
 
@@ -936,7 +936,12 @@ public:
 /* Base class for operations like '+', '-', '*' */
 class Item_num_op :public Item_func_numhybrid
 {
- public:
+protected:
+  bool check_arguments() const
+  {
+    return false; // Checked by aggregate_for_num_op()
+  }
+public:
   Item_num_op(THD *thd, Item *a, Item *b): Item_func_numhybrid(thd, a, b) {}
   virtual void result_precision()= 0;
 
@@ -947,7 +952,7 @@ class Item_num_op :public Item_func_numhybrid
   bool fix_type_handler(const Type_aggregator *aggregator);
   void fix_length_and_dec_double()
   {
-    count_real_length(args, arg_count);
+    aggregate_numeric_attributes_real(args, arg_count);
     max_length= float_length(decimals);
   }
   void fix_length_and_dec_decimal()
@@ -984,22 +989,26 @@ public:
     Min signed   =  -9,223,372,036,854,775,808 = 19 digits, 20 characters
   */
   Item_int_func(THD *thd): Item_func(thd)
-  { collation.set_numeric(); fix_char_length(21); }
+  { collation= DTCollation_numeric(); fix_char_length(21); }
   Item_int_func(THD *thd, Item *a): Item_func(thd, a)
-  { collation.set_numeric(); fix_char_length(21); }
+  { collation= DTCollation_numeric(); fix_char_length(21); }
   Item_int_func(THD *thd, Item *a, Item *b): Item_func(thd, a, b)
-  { collation.set_numeric(); fix_char_length(21); }
+  { collation= DTCollation_numeric(); fix_char_length(21); }
   Item_int_func(THD *thd, Item *a, Item *b, Item *c): Item_func(thd, a, b, c)
-  { collation.set_numeric(); fix_char_length(21); }
+  { collation= DTCollation_numeric(); fix_char_length(21); }
   Item_int_func(THD *thd, Item *a, Item *b, Item *c, Item *d):
     Item_func(thd, a, b, c, d)
-  { collation.set_numeric(); fix_char_length(21); }
+  { collation= DTCollation_numeric(); fix_char_length(21); }
   Item_int_func(THD *thd, List<Item> &list): Item_func(thd, list)
-  { collation.set_numeric(); fix_char_length(21); }
+  { collation= DTCollation_numeric(); fix_char_length(21); }
   Item_int_func(THD *thd, Item_int_func *item) :Item_func(thd, item)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   double val_real();
   String *val_str(String*str);
+  my_decimal *val_decimal(my_decimal *decimal_value)
+  {
+    return val_decimal_from_int(decimal_value);
+  }
   bool get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
   { return get_date_from_int(thd, ltime, fuzzydate); }
   const Type_handler *type_handler() const= 0;
@@ -1016,7 +1025,12 @@ public:
   Item_long_func(THD *thd, Item *a, Item *b, Item *c): Item_int_func(thd, a, b, c) {}
   Item_long_func(THD *thd, List<Item> &list): Item_int_func(thd, list) { }
   Item_long_func(THD *thd, Item_long_func *item) :Item_int_func(thd, item) {}
-  const Type_handler *type_handler() const { return &type_handler_long; }
+  const Type_handler *type_handler() const
+  {
+    if (unsigned_flag)
+      return &type_handler_ulong;
+    return &type_handler_slong;
+  }
   bool fix_length_and_dec() { max_length= 11; return FALSE; }
 };
 
@@ -1028,7 +1042,7 @@ public:
   {}
   longlong val_int();
   bool fix_length_and_dec();
-  const Type_handler *type_handler() const { return &type_handler_long; }
+  const Type_handler *type_handler() const { return &type_handler_slong; }
   Item *get_copy(THD *thd)
   { return get_item_copy<Item_func_hash>(thd, this); }
   const char *func_name() const { return "<hash>"; }
@@ -1045,7 +1059,12 @@ public:
     Item_int_func(thd, a, b, c, d) {}
   Item_longlong_func(THD *thd, List<Item> &list): Item_int_func(thd, list) { }
   Item_longlong_func(THD *thd, Item_longlong_func *item) :Item_int_func(thd, item) {}
-  const Type_handler *type_handler() const { return &type_handler_longlong; }
+  const Type_handler *type_handler() const
+  {
+    if (unsigned_flag)
+      return &type_handler_ulonglong;
+    return &type_handler_slonglong;
+  }
 };
 
 
@@ -1113,7 +1132,10 @@ public:
   }
   const char *func_name() const { return "cast_as_signed"; }
   const Type_handler *type_handler() const
-  { return type_handler_long_or_longlong(); }
+  {
+    return Type_handler::type_handler_long_or_longlong(max_char_length(),
+                                                       false);
+  }
   longlong val_int()
   {
     longlong value= args[0]->val_int_signed_typecast();
@@ -1172,8 +1194,8 @@ public:
   const Type_handler *type_handler() const
   {
     if (max_char_length() <= MY_INT32_NUM_DECIMAL_DIGITS - 1)
-      return &type_handler_long;
-    return &type_handler_longlong;
+      return &type_handler_ulong;
+    return &type_handler_ulonglong;
   }
   longlong val_int()
   {
@@ -1200,7 +1222,7 @@ public:
    :Item_func(thd, a)
   {
     decimals= (uint8) dec;
-    collation.set_numeric();
+    collation= DTCollation_numeric();
     fix_char_length(my_decimal_precision_to_length_no_truncation(len, dec,
                                                                  unsigned_flag));
   }
@@ -1798,6 +1820,10 @@ class Item_func_min_max :public Item_hybrid_func
   String tmp_value;
   int cmp_sign;
 protected:
+  bool check_arguments() const
+  {
+    return false; // Checked by aggregate_for_min_max()
+  }
   bool fix_attributes(Item **item, uint nitems);
 public:
   Item_func_min_max(THD *thd, List<Item> &list, int cmp_sign_arg):
@@ -1915,9 +1941,7 @@ public:
   const Type_handler *type_handler() const { return args[0]->type_handler(); }
   bool fix_length_and_dec()
   {
-    collation= args[0]->collation;
-    max_length= args[0]->max_length;
-    decimals=args[0]->decimals;
+    Type_std_attributes::set(*args[0]);
     return FALSE;
   }
   Item *get_copy(THD *thd)
@@ -1985,6 +2009,10 @@ public:
   bool eval_not_null_tables(void *)
   {
     not_null_tables_cache= 0;
+    return false;
+  }
+  bool find_not_null_fields(table_map allowed)
+  {
     return false;
   }
   Item* propagate_equal_fields(THD *thd, const Context &ctx, COND_EQUAL *cond)
@@ -2359,6 +2387,10 @@ public:
     not_null_tables_cache= 0;
     return 0;
   }
+  bool find_not_null_fields(table_map allowed)
+  {
+    return false;
+  }
   bool is_expensive() { return 1; }
   virtual void print(String *str, enum_query_type query_type);
   bool check_vcol_func_processor(void *arg)
@@ -2415,8 +2447,16 @@ public:
     Item_udf_func(thd, udf_arg, list) {}
   longlong val_int();
   double val_real() { return (double) Item_func_udf_int::val_int(); }
+  my_decimal *val_decimal(my_decimal *decimal_value)
+  {
+    return val_decimal_from_int(decimal_value);
+  }
   String *val_str(String *str);
-  const Type_handler *type_handler() const { return &type_handler_longlong; }
+  const Type_handler *type_handler() const
+  {
+    return unsigned_flag ? &type_handler_ulonglong :
+                           &type_handler_slonglong;
+  }
   bool fix_length_and_dec() { decimals= 0; max_length= 21; return FALSE; }
   Item *get_copy(THD *thd)
   { return get_item_copy<Item_func_udf_int>(thd, this); }
@@ -2508,7 +2548,7 @@ public:
     Item_int_func(thd) {}
   Item_func_udf_int(THD *thd, udf_func *udf_arg, List<Item> &list):
     Item_int_func(thd, list) {}
-  const Type_handler *type_handler() const { return &type_handler_longlong; }
+  const Type_handler *type_handler() const { return &type_handler_slonglong; }
   longlong val_int() { DBUG_ASSERT(fixed == 1); return 0; }
 };
 
@@ -2520,7 +2560,7 @@ public:
     Item_int_func(thd) {}
   Item_func_udf_decimal(THD *thd, udf_func *udf_arg, List<Item> &list):
     Item_int_func(thd, list) {}
-  const Type_handler *type_handler() const { return &type_handler_longlong; }
+  const Type_handler *type_handler() const { return &type_handler_slonglong; }
   my_decimal *val_decimal(my_decimal *) { DBUG_ASSERT(fixed == 1); return 0; }
 };
 
@@ -2970,6 +3010,10 @@ public:
     not_null_tables_cache= 0;
     return 0;
   }
+  bool find_not_null_fields(table_map allowed)
+  {
+    return false;
+  }
   bool fix_fields(THD *thd, Item **ref);
   bool eq(const Item *, bool binary_cmp) const;
   /* The following should be safe, even if we compare doubles */
@@ -3273,6 +3317,10 @@ public:
   }
   bool excl_dep_on_grouping_fields(st_select_lex *sel)
   { return false; }
+  bool find_not_null_fields(table_map allowed)
+  {
+    return false;
+  }
 };
 
 
@@ -3376,6 +3424,10 @@ public:
   {
     not_null_tables_cache= 0;
     return 0;
+  }
+  bool find_not_null_fields(table_map allowed)
+  {
+    return false;
   }
   bool const_item() const { return 0; }
   void evaluate_sideeffects();

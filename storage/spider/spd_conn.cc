@@ -92,6 +92,9 @@ extern PSI_thread_key spd_key_thd_bg_mon;
 /* UTC time zone for timestamp columns */
 extern Time_zone *UTC;
 
+extern sql_mode_t full_sql_mode;
+extern sql_mode_t pushdown_sql_mode;
+
 HASH spider_open_connections;
 uint spider_open_connections_id;
 HASH spider_ipport_conns;
@@ -150,6 +153,7 @@ int spider_reset_conn_setted_parameter(
   conn->autocommit = spider_param_remote_autocommit();
   conn->sql_log_off = spider_param_remote_sql_log_off();
   conn->wait_timeout = spider_param_remote_wait_timeout(thd);
+  conn->sql_mode = full_sql_mode + 1;
   if (thd && spider_param_remote_time_zone())
   {
     int tz_length = strlen(spider_param_remote_time_zone());
@@ -472,30 +476,30 @@ SPIDER_CONN *spider_create_conn(
 #endif
     if (!(conn = (SPIDER_CONN *)
       spider_bulk_malloc(spider_current_trx, 18, MYF(MY_WME | MY_ZEROFILL),
-        &conn, sizeof(*conn),
-        &tmp_name, share->conn_keys_lengths[link_idx] + 1,
-        &tmp_host, share->tgt_hosts_lengths[link_idx] + 1,
+        &conn, (uint) (sizeof(*conn)),
+        &tmp_name, (uint) (share->conn_keys_lengths[link_idx] + 1),
+        &tmp_host, (uint) (share->tgt_hosts_lengths[link_idx] + 1),
         &tmp_username,
-          share->tgt_usernames_lengths[link_idx] + 1,
+          (uint) (share->tgt_usernames_lengths[link_idx] + 1),
         &tmp_password,
-          share->tgt_passwords_lengths[link_idx] + 1,
-        &tmp_socket, share->tgt_sockets_lengths[link_idx] + 1,
+          (uint) (share->tgt_passwords_lengths[link_idx] + 1),
+        &tmp_socket, (uint) (share->tgt_sockets_lengths[link_idx] + 1),
         &tmp_wrapper,
-          share->tgt_wrappers_lengths[link_idx] + 1,
-        &tmp_ssl_ca, share->tgt_ssl_cas_lengths[link_idx] + 1,
+          (uint) (share->tgt_wrappers_lengths[link_idx] + 1),
+        &tmp_ssl_ca, (uint) (share->tgt_ssl_cas_lengths[link_idx] + 1),
         &tmp_ssl_capath,
-          share->tgt_ssl_capaths_lengths[link_idx] + 1,
+          (uint) (share->tgt_ssl_capaths_lengths[link_idx] + 1),
         &tmp_ssl_cert,
-          share->tgt_ssl_certs_lengths[link_idx] + 1,
+          (uint) (share->tgt_ssl_certs_lengths[link_idx] + 1),
         &tmp_ssl_cipher,
-          share->tgt_ssl_ciphers_lengths[link_idx] + 1,
+          (uint) (share->tgt_ssl_ciphers_lengths[link_idx] + 1),
         &tmp_ssl_key,
-          share->tgt_ssl_keys_lengths[link_idx] + 1,
+          (uint) (share->tgt_ssl_keys_lengths[link_idx] + 1),
         &tmp_default_file,
-          share->tgt_default_files_lengths[link_idx] + 1,
+          (uint) (share->tgt_default_files_lengths[link_idx] + 1),
         &tmp_default_group,
-          share->tgt_default_groups_lengths[link_idx] + 1,
-        &need_mon, sizeof(int),
+          (uint) (share->tgt_default_groups_lengths[link_idx] + 1),
+        &need_mon, (uint) (sizeof(int)),
         NullS))
     ) {
       *error_num = HA_ERR_OUT_OF_MEM;
@@ -594,13 +598,13 @@ SPIDER_CONN *spider_create_conn(
   } else if (conn_kind == SPIDER_CONN_KIND_HS_READ) {
     if (!(conn = (SPIDER_CONN *)
       spider_bulk_malloc(spider_current_trx, 19, MYF(MY_WME | MY_ZEROFILL),
-        &conn, sizeof(*conn),
-        &tmp_name, share->hs_read_conn_keys_lengths[link_idx] + 1,
-        &tmp_host, share->tgt_hosts_lengths[link_idx] + 1,
-        &tmp_socket, share->hs_read_socks_lengths[link_idx] + 1,
+        &conn, (uint) (sizeof(*conn)),
+        &tmp_name, (uint) (share->hs_read_conn_keys_lengths[link_idx] + 1),
+        &tmp_host, (uint) (share->tgt_hosts_lengths[link_idx] + 1),
+        &tmp_socket, (uint) (share->hs_read_socks_lengths[link_idx] + 1),
         &tmp_wrapper,
-          share->tgt_wrappers_lengths[link_idx] + 1,
-        &need_mon, sizeof(int),
+          (uint) (share->tgt_wrappers_lengths[link_idx] + 1),
+        &need_mon, (uint) (sizeof(int)),
         NullS))
     ) {
       *error_num = HA_ERR_OUT_OF_MEM;
@@ -636,13 +640,13 @@ SPIDER_CONN *spider_create_conn(
   } else {
     if (!(conn = (SPIDER_CONN *)
       spider_bulk_malloc(spider_current_trx, 20, MYF(MY_WME | MY_ZEROFILL),
-        &conn, sizeof(*conn),
-        &tmp_name, share->hs_write_conn_keys_lengths[link_idx] + 1,
-        &tmp_host, share->tgt_hosts_lengths[link_idx] + 1,
-        &tmp_socket, share->hs_write_socks_lengths[link_idx] + 1,
+        &conn, (uint) (sizeof(*conn)),
+        &tmp_name, (uint) (share->hs_write_conn_keys_lengths[link_idx] + 1),
+        &tmp_host, (uint) (share->tgt_hosts_lengths[link_idx] + 1),
+        &tmp_socket, (uint) (share->hs_write_socks_lengths[link_idx] + 1),
         &tmp_wrapper,
-          share->tgt_wrappers_lengths[link_idx] + 1,
-        &need_mon, sizeof(int),
+          (uint) (share->tgt_wrappers_lengths[link_idx] + 1),
+        &need_mon, (uint) (sizeof(int)),
         NullS))
     ) {
       *error_num = HA_ERR_OUT_OF_MEM;
@@ -1444,6 +1448,18 @@ void spider_conn_queue_wait_timeout(
   DBUG_VOID_RETURN;
 }
 
+void spider_conn_queue_sql_mode(
+  SPIDER_CONN *conn,
+  sql_mode_t sql_mode
+) {
+  DBUG_ENTER("spider_conn_queue_sql_mode");
+  DBUG_PRINT("info", ("spider conn=%p", conn));
+  DBUG_ASSERT(!(sql_mode & ~full_sql_mode));
+  conn->queued_sql_mode = TRUE;
+  conn->queued_sql_mode_val = (sql_mode & pushdown_sql_mode);
+  DBUG_VOID_RETURN;
+}
+
 void spider_conn_queue_time_zone(
   SPIDER_CONN *conn,
   Time_zone *time_zone
@@ -1500,6 +1516,7 @@ void spider_conn_clear_queue(
   conn->queued_autocommit = FALSE;
   conn->queued_sql_log_off = FALSE;
   conn->queued_wait_timeout = FALSE;
+  conn->queued_sql_mode = FALSE;
   conn->queued_time_zone = FALSE;
   conn->queued_trx_start = FALSE;
   conn->queued_xa_start = FALSE;
@@ -3648,13 +3665,16 @@ int spider_create_mon_threads(
       }
       if (!(share->bg_mon_thds = (THD **)
         spider_bulk_malloc(spider_current_trx, 23, MYF(MY_WME | MY_ZEROFILL),
-          &share->bg_mon_thds, sizeof(THD *) * share->all_link_count,
-          &share->bg_mon_threads, sizeof(pthread_t) * share->all_link_count,
-          &share->bg_mon_mutexes, sizeof(pthread_mutex_t) *
-            share->all_link_count,
-          &share->bg_mon_conds, sizeof(pthread_cond_t) * share->all_link_count,
+          &share->bg_mon_thds,
+            (uint) (sizeof(THD *) * share->all_link_count),
+          &share->bg_mon_threads,
+            (uint) (sizeof(pthread_t) * share->all_link_count),
+          &share->bg_mon_mutexes,
+            (uint) (sizeof(pthread_mutex_t) * share->all_link_count),
+          &share->bg_mon_conds,
+            (uint) (sizeof(pthread_cond_t) * share->all_link_count),
           &share->bg_mon_sleep_conds,
-            sizeof(pthread_cond_t) * share->all_link_count,
+            (uint) (sizeof(pthread_cond_t) * share->all_link_count),
           NullS))
       ) {
         error_num = HA_ERR_OUT_OF_MEM;

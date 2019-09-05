@@ -170,7 +170,7 @@ class Item_func_month :public Item_func
 {
 public:
   Item_func_month(THD *thd, Item *a): Item_func(thd, a)
-  { collation.set_numeric(); }
+  { collation= DTCollation_numeric(); }
   longlong val_int();
   double val_real()
   { DBUG_ASSERT(fixed == 1); return (double) Item_func_month::val_int(); }
@@ -182,12 +182,16 @@ public:
     str->set(nr, collation.collation);
     return str;
   }
+  my_decimal *val_decimal(my_decimal *decimal_value)
+  {
+    return val_decimal_from_int(decimal_value);
+  }
   bool get_date(THD *thd, MYSQL_TIME *ltime, date_mode_t fuzzydate)
   {
     return get_date_from_int(thd, ltime, fuzzydate);
   }
   const char *func_name() const { return "month"; }
-  const Type_handler *type_handler() const { return &type_handler_long; }
+  const Type_handler *type_handler() const { return &type_handler_slong; }
   bool fix_length_and_dec()
   {
     decimals= 0;
@@ -442,7 +446,7 @@ class Item_func_weekday :public Item_func
   bool odbc_type;
 public:
   Item_func_weekday(THD *thd, Item *a, bool type_arg):
-    Item_func(thd, a), odbc_type(type_arg) { collation.set_numeric(); }
+    Item_func(thd, a), odbc_type(type_arg) { collation= DTCollation_numeric(); }
   longlong val_int();
   double val_real() { DBUG_ASSERT(fixed == 1); return (double) val_int(); }
   String *val_str(String *str)
@@ -450,6 +454,10 @@ public:
     DBUG_ASSERT(fixed == 1);
     str->set(val_int(), &my_charset_bin);
     return null_value ? 0 : str;
+  }
+  my_decimal *val_decimal(my_decimal *decimal_value)
+  {
+    return val_decimal_from_int(decimal_value);
   }
   const char *func_name() const
   {
@@ -459,7 +467,7 @@ public:
   {
     return type_handler()->Item_get_date_with_warn(thd, this, ltime, fuzzydate);
   }
-  const Type_handler *type_handler() const { return &type_handler_long; }
+  const Type_handler *type_handler() const { return &type_handler_slong; }
   bool fix_length_and_dec()
   {
     decimals= 0;
@@ -972,8 +980,8 @@ class Item_extract :public Item_int_func,
                                                    uint32 threashold)
   {
     if (length >= threashold)
-      return &type_handler_longlong;
-    return &type_handler_long;
+      return &type_handler_slonglong;
+    return &type_handler_slong;
   }
   void set_date_length(uint32 length)
   {
@@ -1004,7 +1012,7 @@ class Item_extract :public Item_int_func,
   const interval_type int_type; // keep it public
   Item_extract(THD *thd, interval_type type_arg, Item *a):
     Item_int_func(thd, a),
-    Type_handler_hybrid_field_type(&type_handler_longlong),
+    Type_handler_hybrid_field_type(&type_handler_slonglong),
     m_date_mode(date_mode_t(0)),
     int_type(type_arg)
   { }
@@ -1548,9 +1556,11 @@ public:
   {
     uint dec= MY_MAX(item->arguments()[0]->datetime_precision(current_thd),
                      interval_dec(item->arguments()[1], int_type(item)));
-    item->collation.set(item->default_charset(),
-                        DERIVATION_COERCIBLE, MY_REPERTOIRE_ASCII);
-    item->fix_char_length_temporal_not_fixed_dec(MAX_DATETIME_WIDTH, dec);
+    item->Type_std_attributes::set(
+      Type_temporal_attributes_not_fixed_dec(MAX_DATETIME_WIDTH, dec, false),
+      DTCollation(item->default_charset(),
+                  DERIVATION_COERCIBLE, MY_REPERTOIRE_ASCII));
+    item->fix_char_length(item->max_length);
     return false;
   }
   bool get_date(THD *thd, Item_handled_func *item,
@@ -1655,9 +1665,11 @@ public:
     uint dec0= item->arguments()[0]->decimals;
     uint dec1= Interval_DDhhmmssff::fsp(current_thd, item->arguments()[1]);
     uint dec= MY_MAX(dec0, dec1);
-    item->collation.set(item->default_charset(),
-                        DERIVATION_COERCIBLE, MY_REPERTOIRE_ASCII);
-    item->fix_char_length_temporal_not_fixed_dec(MAX_DATETIME_WIDTH, dec);
+    item->Type_std_attributes::set(
+      Type_temporal_attributes_not_fixed_dec(MAX_DATETIME_WIDTH, dec, false),
+      DTCollation(item->default_charset(),
+                  DERIVATION_COERCIBLE, MY_REPERTOIRE_ASCII));
+    item->fix_char_length(item->max_length);
     return false;
   }
   bool get_date(THD *thd, Item_handled_func *item,

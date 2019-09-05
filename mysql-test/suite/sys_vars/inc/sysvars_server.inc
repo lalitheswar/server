@@ -22,6 +22,7 @@ select * from information_schema.system_variables
           'in_predicate_conversion_threshold',
           'have_openssl',
           'have_symlink',
+          'have_sanitizer',
           'hostname',
           'large_files_support', 'log_tc_size',
           'lower_case_file_system',

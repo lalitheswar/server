@@ -829,10 +829,10 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %parse-param { THD *thd }
 %lex-param { THD *thd }
 /*
-  Currently there are 48 shift/reduce conflicts.
+  Currently there are 46 shift/reduce conflicts.
   We should not introduce new conflicts any more.
 */
-%expect 47
+%expect 46
 
 /*
    Comments for TOKENS.
@@ -1612,10 +1612,6 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %token  <kwd>  YEAR_SYM                      /* SQL-2003-R */
 
 
-%left   JOIN_SYM INNER_SYM STRAIGHT_JOIN CROSS LEFT RIGHT
-/* A dummy token to force the priority of table_ref production in a join. */
-%left   TABLE_REF_PRIORITY
-
 /*
   Give ESCAPE (in LIKE) a very low precedence.
   This allows the concatenation operator || to be used on the right
@@ -1625,6 +1621,10 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 %left   PREC_BELOW_ESCAPE
 %left   ESCAPE_SYM
 
+/* A dummy token to force the priority of table_ref production in a join. */
+%left   CONDITIONLESS_JOIN
+%left   JOIN_SYM INNER_SYM STRAIGHT_JOIN CROSS LEFT RIGHT ON_SYM USING
+ 
 %left   SET_VAR
 %left   OR_SYM OR2_SYM
 %left   XOR
@@ -1799,7 +1799,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
 
 %type <simple_string>
         remember_name remember_end
-        remember_tok_start remember_tok_end
+        remember_tok_start
         wild_and_where
 
 %type <const_simple_string>
@@ -1864,6 +1864,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         ws_level_flag_desc ws_level_flag_reverse ws_level_flags
         opt_ws_levels ws_level_list ws_level_list_item ws_level_number
         ws_level_range ws_level_list_or_range bool
+        field_options last_field_options
 
 %type <ulonglong_number>
         ulonglong_num real_ulonglong_num size_number
@@ -2059,7 +2060,7 @@ bool my_yyoverflow(short **a, YYSTYPE **b, size_t *yystacksize);
         procedure_list procedure_list2 procedure_item
         field_def handler opt_generated_always
         opt_ignore opt_column opt_restrict
-        grant revoke set lock unlock string_list field_options
+        grant revoke set lock unlock string_list
         opt_binary table_lock_list table_lock
         ref_list opt_match_clause opt_on_update_delete use
         opt_delete_options opt_delete_option varchar nchar nvarchar
@@ -2174,9 +2175,12 @@ END_OF_INPUT
 %type <frame_exclusion> opt_window_frame_exclusion;
 %type <window_frame_bound> window_frame_start window_frame_bound;
 
-%type <NONE>
+%type <kwd>
         '-' '+' '*' '/' '%' '(' ')'
-        ',' '!' '{' '}' '&' '|' AND_SYM OR_SYM BETWEEN_SYM CASE_SYM
+        ',' '!' '{' '}' '&' '|'
+
+%type <NONE>
+        AND_SYM OR_SYM BETWEEN_SYM CASE_SYM
         THEN_SYM WHEN_SYM DIV_SYM MOD_SYM OR2_SYM AND_AND_SYM DELETE_SYM
         MYSQL_CONCAT_SYM ORACLE_CONCAT_SYM
 
@@ -6657,7 +6661,7 @@ field_type_or_serial:
           field_def
         | SERIAL_SYM
           {
-            Lex->last_field->set_handler(&type_handler_longlong);
+            Lex->last_field->set_handler(&type_handler_ulonglong);
             Lex->last_field->flags|= AUTO_INCREMENT_FLAG | NOT_NULL_FLAG
                                      | UNSIGNED_FLAG | UNIQUE_KEY_FLAG;
           }
@@ -6839,9 +6843,12 @@ field_type:
         ;
 
 field_type_numeric:
-          int_type opt_field_length field_options { $$.set($1, $2); }
-        | real_type opt_precision field_options   { $$.set($1, $2); }
-        | FLOAT_SYM float_options field_options
+          int_type opt_field_length last_field_options
+          {
+            $$.set_handler_length_flags($1, $2, (uint32) $3);
+          }
+        | real_type opt_precision last_field_options   { $$.set($1, $2); }
+        | FLOAT_SYM float_options last_field_options
           {
             $$.set(&type_handler_float, $2);
             if ($2.length() && !$2.dec())
@@ -6863,24 +6870,24 @@ field_type_numeric:
           }
         | BOOL_SYM
           {
-            $$.set(&type_handler_tiny, "1");
+            $$.set(&type_handler_stiny, "1");
           }
         | BOOLEAN_SYM
           {
-            $$.set(&type_handler_tiny, "1");
+            $$.set(&type_handler_stiny, "1");
           }
-        | DECIMAL_SYM float_options field_options
+        | DECIMAL_SYM float_options last_field_options
           { $$.set(&type_handler_newdecimal, $2);}
-        | NUMBER_ORACLE_SYM float_options field_options
+        | NUMBER_ORACLE_SYM float_options last_field_options
           {
             if ($2.length() != 0)
               $$.set(&type_handler_newdecimal, $2);
             else
               $$.set(&type_handler_double);
           }
-        | NUMERIC_SYM float_options field_options
+        | NUMERIC_SYM float_options last_field_options
           { $$.set(&type_handler_newdecimal, $2);}
-        | FIXED_SYM float_options field_options
+        | FIXED_SYM float_options last_field_options
           { $$.set(&type_handler_newdecimal, $2);}
         ;
 
@@ -6933,7 +6940,7 @@ field_type_string:
         ;
 
 field_type_temporal:
-          YEAR_SYM opt_field_length field_options
+          YEAR_SYM opt_field_length last_field_options
           {
             if ($2)
             {
@@ -7001,7 +7008,12 @@ field_type_lob:
             Lex->charset=&my_charset_bin;
             $$.set(&type_handler_blob, $2);
           }
-        | BLOB_ORACLE_SYM opt_field_length opt_compressed
+        | BLOB_ORACLE_SYM field_length opt_compressed
+          {
+            Lex->charset=&my_charset_bin;
+            $$.set(&type_handler_blob, $2);
+          }
+        | BLOB_ORACLE_SYM opt_compressed
           {
             Lex->charset=&my_charset_bin;
             $$.set(&type_handler_long_blob);
@@ -7072,11 +7084,11 @@ nvarchar:
         ;
 
 int_type:
-          INT_SYM   { $$= &type_handler_long; }
-        | TINYINT   { $$= &type_handler_tiny; }
-        | SMALLINT  { $$= &type_handler_short; }
-        | MEDIUMINT { $$= &type_handler_int24; }
-        | BIGINT    { $$= &type_handler_longlong; }
+          INT_SYM   { $$= &type_handler_slong; }
+        | TINYINT   { $$= &type_handler_stiny; }
+        | SMALLINT  { $$= &type_handler_sshort; }
+        | MEDIUMINT { $$= &type_handler_sint24; }
+        | BIGINT    { $$= &type_handler_slonglong; }
         ;
 
 real_type:
@@ -7111,12 +7123,16 @@ precision:
         ;
 
 field_options:
-          /* empty */ {}
-        | SIGNED_SYM {}
-        | UNSIGNED { Lex->last_field->flags|= UNSIGNED_FLAG;}
-        | ZEROFILL { Lex->last_field->flags|= UNSIGNED_FLAG | ZEROFILL_FLAG; }
-        | UNSIGNED ZEROFILL { Lex->last_field->flags|= UNSIGNED_FLAG | ZEROFILL_FLAG; }
-        | ZEROFILL UNSIGNED { Lex->last_field->flags|= UNSIGNED_FLAG | ZEROFILL_FLAG; }
+          /* empty */       { $$= 0; }
+        | SIGNED_SYM        { $$= 0; }
+        | UNSIGNED          { $$= UNSIGNED_FLAG; }
+        | ZEROFILL          { $$= UNSIGNED_FLAG | ZEROFILL_FLAG; }
+        | UNSIGNED ZEROFILL { $$= UNSIGNED_FLAG | ZEROFILL_FLAG; }
+        | ZEROFILL UNSIGNED { $$= UNSIGNED_FLAG | ZEROFILL_FLAG; }
+        ;
+
+last_field_options:
+          field_options { Lex->last_field->flags|= ($$= $1); }
         ;
 
 field_length:
@@ -7258,6 +7274,11 @@ serial_attribute:
           {
             Lex->last_field->versioning= $1;
             Lex->create_info.options|= HA_VERSIONED_TABLE;
+            if (Lex->alter_info.flags & ALTER_DROP_SYSTEM_VERSIONING)
+            {
+              my_yyabort_error((ER_VERS_NOT_VERSIONED, MYF(0),
+                       Lex->create_last_non_select_table->table_name.str));
+            }
           }
         ;
 
@@ -8469,6 +8490,7 @@ alter_list_item:
         | DROP SYSTEM VERSIONING_SYM
           {
             Lex->alter_info.flags|= ALTER_DROP_SYSTEM_VERSIONING;
+            Lex->create_info.options&= ~HA_VERSIONED_TABLE;
           }
         | DROP PERIOD_SYM FOR_SYSTEM_TIME_SYM
           {
@@ -8829,6 +8851,7 @@ persistent_column_stat_spec:
           }
           table_column_list
           ')' 
+          { }
         ;
  
 persistent_index_stat_spec:
@@ -8842,6 +8865,7 @@ persistent_index_stat_spec:
           }
           table_index_list
           ')' 
+          { }
         ;
 
 table_column_list:
@@ -9605,12 +9629,6 @@ select_item:
 remember_tok_start:
           {
             $$= (char*) YYLIP->get_tok_start();
-          }
-        ;
-
-remember_tok_end:
-          {
-            $$= (char*) YYLIP->get_tok_end();
           }
         ;
 
@@ -11713,9 +11731,9 @@ cast_type:
         ;
 
 cast_type_numeric:
-          INT_SYM                        { $$.set(&type_handler_longlong); }
-        | SIGNED_SYM                     { $$.set(&type_handler_longlong); }
-        | SIGNED_SYM INT_SYM             { $$.set(&type_handler_longlong); }
+          INT_SYM                        { $$.set(&type_handler_slonglong); }
+        | SIGNED_SYM                     { $$.set(&type_handler_slonglong); }
+        | SIGNED_SYM INT_SYM             { $$.set(&type_handler_slonglong); }
         | UNSIGNED                       { $$.set(&type_handler_ulonglong); }
         | UNSIGNED INT_SYM               { $$.set(&type_handler_ulonglong); }
         | DECIMAL_SYM float_options      { $$.set(&type_handler_newdecimal, $2); }
@@ -11846,18 +11864,18 @@ join_table_list:
   and are ignored.
 */
 esc_table_ref:
-        table_ref { $$=$1; }
-      | '{' ident table_ref '}' { $$=$3; }
-      ;
+          table_ref { $$=$1; }
+        | '{' ident table_ref '}' { $$=$3; }
+        ;
 
 /* Equivalent to <table reference list> in the SQL:2003 standard. */
 /* Warning - may return NULL in case of incomplete SELECT */
 derived_table_list:
           esc_table_ref
-         {
-           $$=$1;
-           Select->add_joined_table($1);
-         }
+          {
+            $$=$1;
+            Select->add_joined_table($1);
+          }
         | derived_table_list ',' esc_table_ref
           {
             MYSQL_YYABORT_UNLESS($1 && ($$=$3));
@@ -11866,25 +11884,17 @@ derived_table_list:
         ;
 
 /*
-  Notice that JOIN is a left-associative operation, and it must be parsed
-  as such, that is, the parser must process first the left join operand
-  then the right one. Such order of processing ensures that the parser
-  produces correct join trees which is essential for semantic analysis
-  and subsequent optimization phases.
+  Notice that JOIN can be a left-associative operator in one context and
+  a right-associative operator in another context (see the comment for
+  st_select_lex::add_cross_joined_table).
 */
 join_table:
           /* INNER JOIN variants */
-          /*
-            Use %prec to evaluate production 'table_ref' before 'normal_join'
-            so that [INNER | CROSS] JOIN is properly nested as other
-            left-associative joins.
-          */
-          table_ref normal_join table_ref %prec TABLE_REF_PRIORITY
+          table_ref normal_join table_ref %prec CONDITIONLESS_JOIN
           {
             MYSQL_YYABORT_UNLESS($1 && ($$=$3));
-            Select->add_joined_table($1);
-            Select->add_joined_table($3);
-            $3->straight=$2;
+            if (unlikely(Select->add_cross_joined_table($1, $3, $2)))
+              MYSQL_YYABORT;
           }
         | table_ref normal_join table_ref
           ON
@@ -11899,9 +11909,9 @@ join_table:
           }
           expr
           {
-	    $3->straight=$2;
+            $3->straight=$2;
             add_join_on(thd, $3, $6);
-            Lex->pop_context();
+            $3->on_context= Lex->pop_context();
             Select->parsing_place= NO_MATTER;
           }
         | table_ref normal_join table_ref
@@ -11941,7 +11951,7 @@ join_table:
           expr
           {
             add_join_on(thd, $5, $8);
-            Lex->pop_context();
+            $5->on_context= Lex->pop_context();
             $5->outer_join|=JOIN_TYPE_LEFT;
             $$=$5;
             Select->parsing_place= NO_MATTER;
@@ -11986,7 +11996,7 @@ join_table:
             if (unlikely(!($$= lex->current_select->convert_right_join())))
               MYSQL_YYABORT;
             add_join_on(thd, $$, $8);
-            Lex->pop_context();
+            $1->on_context= Lex->pop_context();
             Select->parsing_place= NO_MATTER;
           }
         | table_ref RIGHT opt_outer JOIN_SYM table_factor
@@ -12047,7 +12057,11 @@ use_partition:
 table_factor:
           table_primary_ident_opt_parens { $$= $1; }
         | table_primary_derived_opt_parens { $$= $1; }
-        | join_table_parens { $$= $1; }
+        | join_table_parens
+          { 
+            $1->nested_join->nest_type= 0;
+            $$= $1;
+          }
         | table_reference_list_parens { $$= $1; }
         ;
 
@@ -12442,6 +12456,7 @@ window_spec:
           opt_window_ref opt_window_partition_clause
           opt_window_order_clause opt_window_frame_clause
           ')'
+          { }
         ;
 
 opt_window_ref:
@@ -15238,16 +15253,16 @@ with_list_element:
               MYSQL_YYABORT;
             Lex->with_column_list.empty();
           }
-          AS '(' remember_tok_start query_expression remember_tok_end ')'
+          AS '(' query_expression ')'
  	  {
             LEX *lex= thd->lex;
             const char *query_start= lex->sphead ? lex->sphead->m_tmp_query
                                                  : thd->query();
-            char *spec_start= $6 + 1;
-            With_element *elem= new With_element($1, *$2, $7);
+            const char *spec_start= $5.pos() + 1;
+            With_element *elem= new With_element($1, *$2, $6);
 	    if (elem == NULL || Lex->curr_with_clause->add_with_element(elem))
 	      MYSQL_YYABORT;
-            if (elem->set_unparsed_spec(thd, spec_start, $8,
+            if (elem->set_unparsed_spec(thd, spec_start, $7.pos(),
                                         spec_start - query_start))
               MYSQL_YYABORT;
 	  }
@@ -16765,7 +16780,7 @@ table_lock:
                                       ? MDL_SHARED_WRITE
                                       : MDL_SHARED_NO_READ_WRITE;
 
-            if (unlikely(!Select->
+            if (unlikely(!Lex->current_select_or_default()->
                          add_table_to_list(thd, $1, $2, table_options,
                                            lock_type, mdl_type)))
               MYSQL_YYABORT;
@@ -17342,7 +17357,7 @@ opt_column_list:
             LEX *lex=Lex;
             lex->grant |= lex->which_columns;
           }
-        | '(' column_list ')'
+        | '(' column_list ')' { }
         ;
 
 column_list:
@@ -17562,10 +17577,10 @@ release:
 unit_type_decl:
           UNION_SYM union_option
           { $$.unit_type= UNION_TYPE; $$.distinct= $2; }
-        | INTERSECT_SYM
-          { $$.unit_type= INTERSECT_TYPE; $$.distinct= 1; }
-        | EXCEPT_SYM
-          { $$.unit_type= EXCEPT_TYPE; $$.distinct= 1; }
+        | INTERSECT_SYM union_option
+          { $$.unit_type= INTERSECT_TYPE; $$.distinct= $2; }
+        | EXCEPT_SYM union_option
+          { $$.unit_type= EXCEPT_TYPE; $$.distinct= $2; }
         ;
 
 /*
@@ -17651,7 +17666,7 @@ view_suid:
 view_list_opt:
           /* empty */
           {}
-        | '(' view_list ')'
+        | '(' view_list ')' { }
         ;
 
 view_list:

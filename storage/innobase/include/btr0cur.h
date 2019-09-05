@@ -784,17 +784,17 @@ btr_rec_copy_externally_stored_field(
 	ulint*			len,
 	mem_heap_t*		heap);
 
-/*******************************************************************//**
-Flags the data tuple fields that are marked as extern storage in the
+/** Flag the data tuple fields that are marked as extern storage in the
 update vector.  We use this function to remember which fields we must
 mark as extern storage in a record inserted for an update.
+@param[in,out]	tuple	clustered index record
+@param[in]	n	number of fields in tuple, before any btr_cur_trim()
+@param[in]	update	update vector
+@param[in,out]	heap	memory heap
 @return number of flagged external columns */
 ulint
-btr_push_update_extern_fields(
-/*==========================*/
-	dtuple_t*	tuple,	/*!< in/out: data tuple */
-	const upd_t*	update,	/*!< in: update vector */
-	mem_heap_t*	heap)	/*!< in: memory heap */
+btr_push_update_extern_fields(dtuple_t* tuple, ulint n, const upd_t* update,
+			      mem_heap_t* heap)
 	MY_ATTRIBUTE((nonnull));
 /***********************************************************//**
 Sets a secondary index record's delete mark to the given value. This
@@ -1034,7 +1034,7 @@ inherited external field. */
 #define BTR_EXTERN_INHERITED_FLAG	64U
 
 /** Number of searches down the B-tree in btr_cur_search_to_nth_level(). */
-extern ulint	btr_cur_n_non_sea;
+extern Atomic_counter<ulint>	btr_cur_n_non_sea;
 /** Old value of btr_cur_n_non_sea.  Copied by
 srv_refresh_innodb_monitor_stats().  Referenced by
 srv_printf_innodb_monitor(). */

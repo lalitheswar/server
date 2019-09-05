@@ -272,8 +272,8 @@ void XINDEX::Close(void)
 /***********************************************************************/
 int XINDEX::Qcompare(int *i1, int *i2)
   {
-  register int  k;
-  register PXCOL kcp;
+  int  k;
+  PXCOL kcp;
 
   for (kcp = To_KeyCol, k = 0; kcp; kcp = kcp->Next)
     if ((k = kcp->Compare(*i1, *i2)))
@@ -558,13 +558,14 @@ bool XINDEX::Make(PGLOBAL g, PIXDEF sxp)
           Nk, n, Num_K, Ndif, addcolp, Tdbp->To_BlkFil, X);
 
   // Check whether the unique index is unique indeed
-  if (!Mul)
+  if (!Mul) {
     if (Ndif < Num_K) {
       strcpy(g->Message, MSG(INDEX_NOT_UNIQ));
       brc = true;
       goto err;
     } else
       PlgDBfree(Offset);           // Not used anymore
+  }
 
   // Restore kcp list
   To_LastCol->Next = addcolp;
@@ -745,7 +746,7 @@ int XINDEX::ColMaxSame(PXCOL kp)
 /***********************************************************************/
 bool XINDEX::Reorder(PGLOBAL g __attribute__((unused)))
   {
-  register int i, j, k, n;
+  int i, j, k, n;
   bool          sorted = true;
   PXCOL         kcp;
 #if 0
@@ -1207,7 +1208,6 @@ bool XINDEX::MapInit(PGLOBAL g)
   PCOL    colp;
   PXCOL   prev = NULL, kcp = NULL;
   PDOSDEF defp = (PDOSDEF)Tdbp->To_Def;
-  PDBUSER dup = PlgGetUser(g);
 
   /*********************************************************************/
   /*  Get the estimated table size.                                    */
@@ -1870,8 +1870,8 @@ int XINDEX::Fetch(PGLOBAL g)
 /***********************************************************************/
 int XINDEX::FastFind(void)
   {
-  register int  curk, sup, inf, i= 0, k, n = 2;
-  register PXCOL kp, kcp;
+  int  curk, sup, inf, i= 0, k, n = 2;
+  PXCOL kp, kcp;
 
 //assert((int)nv == Nval);
 
@@ -2038,12 +2038,12 @@ int XINDXS::Range(PGLOBAL g, int limit, bool incl)
     kp->Valp->SetValue_pval(xp->GetValue(), !kp->Prefix);
     k = FastFind();
 
-    if (k < Num_K || Op != OP_EQ)
+    if (k < Num_K || Op != OP_EQ) {
       if (limit)
         n = (Mul) ? k : kp->Val_K;
       else
         n = (Mul) ? Pof[kp->Val_K + 1] - k : 1;
-
+    }
   } else {
     strcpy(g->Message, MSG(RANGE_NO_JOIN));
     n = -1;                        // Logical error
@@ -2209,8 +2209,8 @@ int XINDXS::Fetch(PGLOBAL g)
 /***********************************************************************/
 int XINDXS::FastFind(void)
   {
-  register int   sup, inf, i= 0, n = 2;
-  register PXCOL kcp = To_KeyCol;
+  int   sup, inf, i= 0, n = 2;
+  PXCOL kcp = To_KeyCol;
 
   if (Nblk && Op == OP_EQ) {
     // Look in block values to find in which block to search
@@ -3235,7 +3235,7 @@ void KXYCOL::FillValue(PVAL valp)
 int KXYCOL::Compare(int i1, int i2)
   {
   // Do the actual comparison between values.
-  register int k = Kblp->CompVal(i1, i2);
+  int k = Kblp->CompVal(i1, i2);
 
   if (trace(4))
     htrc("Compare done result=%d\n", k);
@@ -3250,7 +3250,7 @@ int KXYCOL::CompVal(int i)
   {
   // Do the actual comparison between numerical values.
   if (trace(4)) {
-    register int k = (int)Kblp->CompVal(Valp, (int)i);
+    int k = (int)Kblp->CompVal(Valp, (int)i);
 
     htrc("Compare done result=%d\n", k);
     return k;

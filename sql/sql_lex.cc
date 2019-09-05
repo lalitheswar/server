@@ -1514,6 +1514,7 @@ int Lex_input_stream::lex_one_token(YYSTYPE *yylval, THD *thd)
     case MY_LEX_SKIP:                          // This should not happen
       if (c != ')')
         next_state= MY_LEX_START;         // Allow signed numbers
+      yylval->kwd.set_keyword(m_tok_start, 1);
       return((int) c);
 
     case MY_LEX_MINUS_OR_COMMENT:
@@ -2353,6 +2354,7 @@ void st_select_lex_unit::init_query()
   offset_limit_cnt= 0;
   union_distinct= 0;
   prepared= optimized= optimized_2= executed= 0;
+  bag_set_op_optimized= 0;
   optimize_started= 0;
   item= 0;
   union_result= 0;
@@ -2368,8 +2370,8 @@ void st_select_lex_unit::init_query()
   with_clause= 0;
   with_element= 0;
   columns_are_renamed= false;
-  intersect_mark= NULL;
   with_wrapped_tvc= false;
+  have_except_all_or_intersect_all= false;
 }
 
 void st_select_lex::init_query()
@@ -2467,6 +2469,7 @@ void st_select_lex::init_select()
   curr_tvc_name= 0;
   in_tvc= false;
   versioned_tables= 0;
+  nest_flags= 0;
 }
 
 /*
@@ -2985,7 +2988,6 @@ bool st_select_lex::setup_ref_array(THD *thd, uint order_group_num)
 
 void st_select_lex_unit::print(String *str, enum_query_type query_type)
 {
-  bool union_all= !union_distinct;
   if (with_clause)
     with_clause->print(str, query_type);
   for (SELECT_LEX *sl= first_select(); sl; sl= sl->next_select())
@@ -2998,8 +3000,6 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
         DBUG_ASSERT(0);
       case UNION_TYPE:
         str->append(STRING_WITH_LEN(" union "));
-        if (union_all)
-          str->append(STRING_WITH_LEN("all "));
         break;
       case INTERSECT_TYPE:
         str->append(STRING_WITH_LEN(" intersect "));
@@ -3008,8 +3008,8 @@ void st_select_lex_unit::print(String *str, enum_query_type query_type)
         str->append(STRING_WITH_LEN(" except "));
         break;
       }
-      if (sl == union_distinct)
-        union_all= TRUE;
+      if (!sl->distinct)
+        str->append(STRING_WITH_LEN("all "));
     }
     if (sl->braces)
       str->append('(');
@@ -3074,14 +3074,13 @@ void st_select_lex::print_limit(THD *thd,
   if (item && unit->global_parameters() == this)
   {
     Item_subselect::subs_type subs_type= item->substype();
-    if (subs_type == Item_subselect::EXISTS_SUBS ||
-        subs_type == Item_subselect::IN_SUBS ||
+    if (subs_type == Item_subselect::IN_SUBS ||
         subs_type == Item_subselect::ALL_SUBS)
     {
       return;
     }
   }
-  if (explicit_limit)
+  if (explicit_limit && select_limit)
   {
     str->append(STRING_WITH_LEN(" limit "));
     if (offset_limit)
@@ -3523,6 +3522,8 @@ bool st_select_lex_unit::union_needs_tmp_table()
         with_wrapped_tvc= true;
         break;
       }
+      if (sl != first_select() && sl->linkage != UNION_TYPE)
+        return true;
     }
   }
   if (with_wrapped_tvc)
@@ -5394,7 +5395,7 @@ LEX::wrap_unit_into_derived(SELECT_LEX_UNIT *unit)
   Name_resolution_context *context= &wrapping_sel->context;
   context->init();
   wrapping_sel->automatic_brackets= FALSE;
-
+  wrapping_sel->mark_as_unit_nest();
   wrapping_sel->register_unit(unit, context);
 
   /* stuff dummy SELECT * FROM (...) */
@@ -5515,6 +5516,19 @@ bool LEX::push_context(Name_resolution_context *context)
                         0)));
   bool res= context_stack.push_front(context, thd->mem_root);
   DBUG_RETURN(res);
+}
+
+
+Name_resolution_context *LEX::pop_context()
+{
+  DBUG_ENTER("LEX::pop_context");
+  Name_resolution_context *context= context_stack.pop();
+  DBUG_PRINT("info", ("Context: %p Select: %p (%d)",
+                       context, context->select_lex,
+                       (context->select_lex ?
+                        context->select_lex->select_number:
+                        0)));
+  DBUG_RETURN(context);
 }
 
 
@@ -5966,9 +5980,9 @@ sp_variable *LEX::sp_add_for_loop_variable(THD *thd, const LEX_CSTRING *name,
   sp_variable *spvar= spcont->add_variable(thd, name);
   spcont->declare_var_boundary(1);
   spvar->field_def.field_name= spvar->name;
-  spvar->field_def.set_handler(&type_handler_longlong);
-  type_handler_longlong.Column_definition_prepare_stage2(&spvar->field_def,
-                                                         NULL, HA_CAN_GEOMETRY);
+  spvar->field_def.set_handler(&type_handler_slonglong);
+  type_handler_slonglong.Column_definition_prepare_stage2(&spvar->field_def,
+                                                          NULL, HA_CAN_GEOMETRY);
   if (!value && unlikely(!(value= new (thd->mem_root) Item_null(thd))))
     return NULL;
 
@@ -7893,8 +7907,9 @@ bool st_select_lex::collect_grouping_fields(THD *thd)
     Item *item= *ord->item;
     if (item->type() != Item::FIELD_ITEM &&
         !(item->type() == Item::REF_ITEM &&
-        ((((Item_ref *) item)->ref_type() == Item_ref::VIEW_REF) ||
-        (((Item_ref *) item)->ref_type() == Item_ref::REF))))
+          item->real_type() == Item::FIELD_ITEM &&
+          ((((Item_ref *) item)->ref_type() == Item_ref::VIEW_REF) ||
+           (((Item_ref *) item)->ref_type() == Item_ref::REF))))
       continue;
 
     Field_pair *grouping_tmp_field=
@@ -10481,4 +10496,15 @@ Lex_cast_type_st::create_typecast_item_or_error(THD *thd, Item *item,
              ErrConvString(buf, length, system_charset_info).ptr());
   }
   return tmp;
+}
+
+
+void Lex_field_type_st::set_handler_length_flags(const Type_handler *handler,
+                                                 const char *length,
+                                                 uint32 flags)
+{
+  DBUG_ASSERT(!handler->is_unsigned());
+  if (flags & UNSIGNED_FLAG)
+    handler= handler->type_handler_unsigned();
+  set(handler, length, NULL);
 }

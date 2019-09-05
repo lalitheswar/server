@@ -2598,6 +2598,7 @@ export const char *optimizer_switch_names[]=
   "condition_pushdown_for_subquery",
   "rowid_filter",
   "condition_pushdown_from_having",
+  "not_null_range_scan",
   "default", 
   NullS
 };
@@ -4822,6 +4823,16 @@ static Sys_var_have Sys_have_symlink(
        "Will be set to DISABLED if the server is started with the "
        "--skip-symbolic-links option.",
        READ_ONLY GLOBAL_VAR(have_symlink), NO_CMD_LINE);
+
+#ifdef __SANITIZE_ADDRESS__
+static char *have_sanitizer;
+static Sys_var_charptr Sys_have_santitizer(
+       "have_sanitizer",
+       "If the server is compiled with ASan (Address sanitizer) this will be "
+       "set to ASAN",
+       READ_ONLY GLOBAL_VAR(have_sanitizer), NO_CMD_LINE,
+       IN_FS_CHARSET, DEFAULT("ASAN"));
+#endif
 
 static bool fix_log_state(sys_var *self, THD *thd, enum_var_type type);
 

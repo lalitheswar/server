@@ -253,7 +253,7 @@ PQRYRES DBFColumns(PGLOBAL g, PCSZ dp, PCSZ fn, bool info)
           mainhead.Encryptflag, mainhead.Mdxflag, mainhead.Language);
     htrc("%hd records, last changed %02d/%02d/%d\n",
           mainhead.Records(), mainhead.Filedate[1], mainhead.Filedate[2],
-          mainhead.Filedate[0] + (mainhead.Filedate[0] <= 30) ? 2000 : 1900);
+         mainhead.Filedate[0] + ((mainhead.Filedate[0] <= 30) ? 2000 : 1900));
     htrc("Field    Type  Offset  Len  Dec  Set  Mdx\n");
     } // endif trace
 
@@ -840,7 +840,7 @@ int DBFFAM::DeleteRecords(PGLOBAL g, int irc)
   {
   if (irc == RC_OK) {
     // T_Stream is the temporary stream or the table file stream itself
-    if (!T_Stream)
+    if (!T_Stream) {
       if (UseTemp) {
         if (OpenTempFile(g))
           return RC_FX;
@@ -850,10 +850,11 @@ int DBFFAM::DeleteRecords(PGLOBAL g, int irc)
 
       } else
         T_Stream = Stream;
+    }
 
     *Tdbp->GetLine() = '*';
     Modif++;                         // Modified line in Delete mode
-    } // endif irc
+  } // endif irc
 
   return RC_OK;
   } // end of DeleteRecords

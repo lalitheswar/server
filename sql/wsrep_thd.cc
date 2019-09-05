@@ -87,9 +87,24 @@ static bool create_wsrep_THD(Wsrep_thd_args* args)
 {
   ulong old_wsrep_running_threads= wsrep_running_threads;
   pthread_t unused;
+#ifdef HAVE_PSI_THREAD_INTERFACE
+  PSI_thread_key key;
 
-  bool res= pthread_create(&unused, &connection_attrib, start_wsrep_THD,
-                           args);
+  switch (args->thread_type())
+  {
+    case WSREP_APPLIER_THREAD:
+      key= key_wsrep_applier;
+      break;
+    case WSREP_ROLLBACKER_THREAD:
+      key= key_wsrep_rollbacker;
+      break;
+    default:
+      assert(0);
+      break;
+  }
+#endif
+  bool res= mysql_thread_create(key, &unused, &connection_attrib,
+                                start_wsrep_THD, (void*)args);
   /*
     if starting a thread on server startup, wait until the this thread's THD
     is fully initialized (otherwise a THD initialization code might
@@ -123,7 +138,8 @@ void wsrep_create_appliers(long threads)
   
   while (wsrep_threads++ < threads)
   {
-    Wsrep_thd_args* args(new Wsrep_thd_args(wsrep_replication_process, 0));
+    Wsrep_thd_args* args(new Wsrep_thd_args(wsrep_replication_process, 0,
+                                            WSREP_APPLIER_THREAD));
     if (create_wsrep_THD(args))
     {
       WSREP_WARN("Can't create thread to manage wsrep replication");
@@ -312,14 +328,16 @@ void wsrep_create_rollbacker()
 {
   if (wsrep_cluster_address && wsrep_cluster_address[0] != 0)
   {
-    Wsrep_thd_args* args= new Wsrep_thd_args(wsrep_rollback_process, 0);
+    Wsrep_thd_args* args= new Wsrep_thd_args(wsrep_rollback_process, 0,
+                                             WSREP_ROLLBACKER_THREAD);
 
     /* create rollbacker */
     if (create_wsrep_THD(args))
       WSREP_WARN("Can't create thread to manage wsrep rollback");
 
     /* create post_rollbacker */
-    args= new Wsrep_thd_args(wsrep_post_rollback_process, 0);
+    args= new Wsrep_thd_args(wsrep_post_rollback_process, 0,
+                             WSREP_ROLLBACKER_THREAD);
     if (create_wsrep_THD(args))
       WSREP_WARN("Can't create thread to manage wsrep post rollback");
    }

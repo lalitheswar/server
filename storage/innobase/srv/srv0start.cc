@@ -47,7 +47,6 @@ Created 2/16/1996 Heikki Tuuri
 
 #include "row0ftsort.h"
 #include "ut0mem.h"
-#include "ut0timer.h"
 #include "mem0mem.h"
 #include "data0data.h"
 #include "data0type.h"
@@ -424,7 +423,7 @@ create_log_files(
 	/* Create a log checkpoint. */
 	log_mutex_enter();
 	if (log_sys.is_encrypted() && !log_crypt_init()) {
-		return(DB_ERROR);
+		return DB_ERROR;
 	}
 	ut_d(recv_no_log_write = false);
 	log_sys.lsn = ut_uint64_align_up(lsn, OS_FILE_LOG_BLOCK_SIZE);
@@ -1532,6 +1531,10 @@ dberr_t srv_start(bool create_new_db)
 
 	srv_log_file_size_requested = srv_log_file_size;
 
+	if (innodb_encrypt_temporary_tables && !log_crypt_init()) {
+		return srv_init_abort(DB_ERROR);
+	}
+
 	if (create_new_db) {
 
 		buf_flush_sync_all_buf_pools();
@@ -1676,7 +1679,7 @@ dberr_t srv_start(bool create_new_db)
 		ut_a(fil_validate());
 		ut_a(log_space);
 
-		ut_a(srv_log_file_size <= 512ULL << 30);
+		ut_a(srv_log_file_size <= log_group_max_size);
 
 		const ulint size = 1 + ulint((srv_log_file_size - 1)
 					     >> srv_page_size_shift);

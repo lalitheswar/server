@@ -1107,6 +1107,8 @@ Gets the compressed page descriptor corresponding to an uncompressed page
 if applicable. */
 #define buf_block_get_page_zip(block) \
 	((block)->page.zip.data ? &(block)->page.zip : NULL)
+#define is_buf_block_get_page_zip(block) \
+        ((block)->page.zip.data != 0)
 
 #ifdef BTR_CUR_HASH_ADAPT
 /** Get a buffer block from an adaptive hash index pointer.
@@ -1904,13 +1906,13 @@ public:
 		HazardPointer(buf_pool, mutex) {}
 
 	/** Destructor */
-	virtual ~FlushHp() {}
+	~FlushHp() override {}
 
 	/** Adjust the value of hp. This happens when some
 	other thread working on the same list attempts to
 	remove the hp from the list.
 	@param bpage	buffer block to be compared */
-	void adjust(const buf_page_t* bpage);
+	void adjust(const buf_page_t* bpage) override;
 };
 
 /** Class implementing buf_pool->LRU hazard pointer */
@@ -1925,13 +1927,13 @@ public:
 		HazardPointer(buf_pool, mutex) {}
 
 	/** Destructor */
-	virtual ~LRUHp() {}
+	~LRUHp() override {}
 
 	/** Adjust the value of hp. This happens when some
 	other thread working on the same list attempts to
 	remove the hp from the list.
 	@param bpage	buffer block to be compared */
-	void adjust(const buf_page_t* bpage);
+	void adjust(const buf_page_t* bpage) override;
 };
 
 /** Special purpose iterators to be used when scanning the LRU list.
@@ -1949,7 +1951,7 @@ public:
 		LRUHp(buf_pool, mutex) {}
 
 	/** Destructor */
-	virtual ~LRUItr() {}
+	~LRUItr() override {}
 
 	/** Selects from where to start a scan. If we have scanned
 	too deep into the LRU list it resets the value to the tail

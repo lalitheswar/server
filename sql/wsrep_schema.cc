@@ -474,7 +474,7 @@ static int scan(TABLE* table, uint field, char* strbuf, uint strbuf_len)
 {
   String str;
   (void)table->field[field]->val_str(&str);
-  strncpy(strbuf, str.c_ptr(), std::min(str.length(), strbuf_len));
+  strncpy(strbuf, str.ptr(), std::min(str.length(), strbuf_len));
   strbuf[strbuf_len - 1]= '\0';
   return 0;
 }
@@ -1289,7 +1289,7 @@ int Wsrep_schema::recover_sr_transactions(THD *orig_thd)
     goto out;
   }
 
-  while (true)
+  while (0 == error)
   {
     if ((error= Wsrep_schema_impl::next_record(frag_table)) == 0)
     {
@@ -1343,19 +1343,24 @@ int Wsrep_schema::recover_sr_transactions(THD *orig_thd)
                                    ws_meta);
       }
       applier->store_globals();
-      applier->apply_write_set(ws_meta, data);
-      applier->after_apply();
+      wsrep::mutable_buffer unused;
+      if ((ret= applier->apply_write_set(ws_meta, data, unused)) != 0)
+      {
+        WSREP_ERROR("SR trx recovery applying returned %d", ret);
+      }
+      else
+      {
+        applier->after_apply();
+      }
       storage_service.store_globals();
     }
     else if (error == HA_ERR_END_OF_FILE)
     {
       ret= 0;
-      break;
     }
     else
     {
       WSREP_ERROR("SR table scan returned error %d", error);
-      break;
     }
   }
   Wsrep_schema_impl::end_scan(frag_table);

@@ -587,14 +587,14 @@ inline bool is_system_table_name(const char *name, size_t length)
   
   SYNOPSIS
   open_table_def()
-  thd		Thread handler
+  thd		  Thread handler
   share		Fill this with table definition
-  db_flags	Bit mask of the following flags: OPEN_VIEW
+  flags	  Bit mask of the following flags: OPEN_VIEW
 
   NOTES
     This function is called when the table definition is not cached in
     table definition cache
-    The data is returned in 'share', which is alloced by
+    The data is returned in 'share', which is allocated by
     alloc_table_share().. The code assumes that share is initialized.
 */
 
@@ -1184,8 +1184,8 @@ bool parse_vcol_defs(THD *thd, MEM_ROOT *mem_root, TABLE *table,
     {
       List<Item> *field_list= new (mem_root) List<Item>();
       Item *list_item;
-      KEY *key;
-      uint key_index, parts;
+      KEY *key= 0;
+      uint key_index, parts= 0;
       for (key_index= 0; key_index < table->s->keys; key_index++)
       {
         key=table->key_info + key_index;
@@ -1193,7 +1193,7 @@ bool parse_vcol_defs(THD *thd, MEM_ROOT *mem_root, TABLE *table,
         if (key->key_part[parts].fieldnr == field->field_index + 1)
           break;
       }
-      if (key->algorithm != HA_KEY_ALG_LONG_HASH)
+      if (!key || key->algorithm != HA_KEY_ALG_LONG_HASH)
         goto end;
       KEY_PART_INFO *keypart;
       for (uint i=0; i < parts; i++)
@@ -5148,6 +5148,7 @@ void TABLE::init(THD *thd, TABLE_LIST *tl)
   range_rowid_filter_cost_info= NULL;
   update_handler= NULL;
   check_unique_buf= NULL;
+  vers_write= s->versioned;
 #ifdef HAVE_REPLICATION
   /* used in RBR Triggers */
   master_had_triggers= 0;
@@ -5165,6 +5166,8 @@ void TABLE::init(THD *thd, TABLE_LIST *tl)
     (*f_ptr)->next_equal_field= NULL;
     (*f_ptr)->cond_selectivity= 1.0;
   }
+
+  notnull_cond= 0;
 
   DBUG_ASSERT(!file->keyread_enabled());
 

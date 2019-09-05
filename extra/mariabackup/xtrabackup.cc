@@ -1295,7 +1295,7 @@ struct my_option xb_server_options[] =
   {"innodb_log_file_size", OPT_INNODB_LOG_FILE_SIZE,
    "Ignored for mysqld option compatibility",
    (G_PTR*) &srv_log_file_size, (G_PTR*) &srv_log_file_size, 0,
-   GET_ULL, REQUIRED_ARG, 48 << 20, 1 << 20, 512ULL << 30, 0,
+   GET_ULL, REQUIRED_ARG, 48 << 20, 1 << 20, log_group_max_size, 0,
    UNIV_PAGE_SIZE_MAX, 0},
   {"innodb_log_files_in_group", OPT_INNODB_LOG_FILES_IN_GROUP,
    "Ignored for mysqld option compatibility",
@@ -3798,7 +3798,7 @@ open_or_create_log_file(
 	fil_space_t* space,
 	ulint	i)			/*!< in: log file number in group */
 {
-	char	name[10000];
+	char	name[FN_REFLEN];
 	ulint	dirnamelen;
 
 	os_normalize_path(srv_log_group_home_dir);

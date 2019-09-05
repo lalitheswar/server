@@ -1,4 +1,4 @@
-Windows bug: happens when a new line is exactly at the right offset.
+Windows bug: new line disappears when it is exactly at the right offset.
 The following options may be given as the first argument:
 --print-defaults Print the program argument list and exit.
 --no-defaults Don't read default options from any option file.
@@ -710,7 +710,7 @@ The following specify which files/extra groups are read (specified before remain
  extended_keys, exists_to_in, orderby_uses_equalities, 
  condition_pushdown_for_derived, split_materialized, 
  condition_pushdown_for_subquery, rowid_filter, 
- condition_pushdown_from_having
+ condition_pushdown_from_having, not_null_range_scan
  --optimizer-trace=name 
  Controls tracing of the Optimizer:
  optimizer_trace=option=val[,option=val...], where option

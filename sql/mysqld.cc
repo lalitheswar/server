@@ -2884,75 +2884,6 @@ extern "C" char *my_demangle(const char *mangled_name, int *status)
 #endif
 
 
-/*
-  pthread_attr_setstacksize() without so much platform-dependency
-
-  Return: The actual stack size if possible.
-*/
-
-#ifndef EMBEDDED_LIBRARY
-static size_t my_setstacksize(pthread_attr_t *attr, size_t stacksize)
-{
-  size_t guard_size __attribute__((unused))= 0;
-
-#if defined(__ia64__) || defined(__ia64)
-  /*
-    On IA64, half of the requested stack size is used for "normal stack"
-    and half for "register stack".  The space measured by check_stack_overrun
-    is the "normal stack", so double the request to make sure we have the
-    caller-expected amount of normal stack.
-
-    NOTE: there is no guarantee that the register stack can't grow faster
-    than normal stack, so it's very unclear that we won't dump core due to
-    stack overrun despite check_stack_overrun's efforts.  Experimentation
-    shows that in the execution_constants test, the register stack grows
-    less than half as fast as normal stack, but perhaps other scenarios are
-    less forgiving.  If it turns out that more space is needed for the
-    register stack, that could be forced (rather inefficiently) by using a
-    multiplier higher than 2 here.
-  */
-  stacksize *= 2;
-#endif
-
-  /*
-    On many machines, the "guard space" is subtracted from the requested
-    stack size, and that space is quite large on some platforms.  So add
-    it to our request, if we can find out what it is.
-  */
-#ifdef HAVE_PTHREAD_ATTR_GETGUARDSIZE
-  if (pthread_attr_getguardsize(attr, &guard_size))
-    guard_size = 0;		/* if can't find it out, treat as 0 */
-#endif
-
-  pthread_attr_setstacksize(attr, stacksize + guard_size);
-
-  /* Retrieve actual stack size if possible */
-#ifdef HAVE_PTHREAD_ATTR_GETSTACKSIZE
-  {
-    size_t real_stack_size= 0;
-    /* We must ignore real_stack_size = 0 as Solaris 2.9 can return 0 here */
-    if (pthread_attr_getstacksize(attr, &real_stack_size) == 0 &&
-	real_stack_size > guard_size)
-    {
-      real_stack_size -= guard_size;
-      if (real_stack_size < stacksize)
-      {
-	if (global_system_variables.log_warnings)
-          sql_print_warning("Asked for %zu thread stack, but got %zu",
-                            stacksize, real_stack_size);
-	stacksize= real_stack_size;
-      }
-    }
-  }
-#endif /* !EMBEDDED_LIBRARY */
-
-#if defined(__ia64__) || defined(__ia64)
-  stacksize /= 2;
-#endif
-  return stacksize;
-}
-#endif
-
 #ifdef DBUG_ASSERT_AS_PRINTF
 extern "C" void
 mariadb_dbug_assert_failed(const char *assert_expr, const char *file,
@@ -4795,6 +4726,7 @@ static int init_server_components()
     We need to call each of these following functions to ensure that
     all things are initialized so that unireg_abort() doesn't fail
   */
+  my_cpu_init();
   mdl_init();
   if (tdc_init() || hostname_cache_init())
     unireg_abort(1);
@@ -5277,7 +5209,7 @@ static int init_server_components()
     int error;
     mysql_mutex_t *log_lock= mysql_bin_log.get_log_lock();
     mysql_mutex_lock(log_lock);
-    error= mysql_bin_log.open(opt_bin_logname, LOG_BIN, 0, 0,
+    error= mysql_bin_log.open(opt_bin_logname, 0, 0,
                               WRITE_CACHE, max_binlog_size, 0, TRUE);
     mysql_mutex_unlock(log_lock);
     if (unlikely(error))
@@ -5579,7 +5511,13 @@ int mysqld_main(int argc, char **argv)
   new_thread_stack_size= my_setstacksize(&connection_attrib,
                                          (size_t)my_thread_stack_size);
   if (new_thread_stack_size != my_thread_stack_size)
+  {
+    if ((new_thread_stack_size < my_thread_stack_size) &&
+        global_system_variables.log_warnings)
+      sql_print_warning("Asked for %llu thread stack, but got %llu",
+                        my_thread_stack_size, new_thread_stack_size);
     SYSVAR_AUTOSIZE(my_thread_stack_size, new_thread_stack_size);
+  }
 
   (void) thr_setconcurrency(concurrency);	// 10 by default
 
@@ -5704,6 +5642,9 @@ int mysqld_main(int argc, char **argv)
       {
         wsrep_init_startup (false);
       }
+
+      WSREP_DEBUG("Startup creating %ld applier threads running %lu",
+	      wsrep_slave_threads - 1, wsrep_running_applier_threads);
       wsrep_create_appliers(wsrep_slave_threads - 1);
     }
   }
@@ -5782,7 +5723,7 @@ int mysqld_main(int argc, char **argv)
   /* Signal threads waiting for server to be started */
   mysql_mutex_lock(&LOCK_server_started);
   mysqld_server_started= 1;
-  mysql_cond_signal(&COND_server_started);
+  mysql_cond_broadcast(&COND_server_started);
   mysql_mutex_unlock(&LOCK_server_started);
 
   MYSQL_SET_STAGE(0 ,__FILE__, __LINE__);
@@ -7695,6 +7636,8 @@ SHOW_VAR status_vars[]= {
   {"wsrep_provider_vendor",   (char*) &wsrep_provider_vendor,   SHOW_CHAR_PTR},
   {"wsrep_provider_capabilities", (char*) &wsrep_provider_capabilities, SHOW_CHAR_PTR},
   {"wsrep_thread_count",      (char*) &wsrep_running_threads,   SHOW_LONG_NOFLUSH},
+  {"wsrep_applier_thread_count", (char*) &wsrep_running_applier_threads, SHOW_LONG_NOFLUSH},
+  {"wsrep_rollbacker_thread_count", (char *) &wsrep_running_rollbacker_threads, SHOW_LONG_NOFLUSH},
   {"wsrep_cluster_capabilities", (char*) &wsrep_cluster_capabilities, SHOW_CHAR_PTR},
   {"wsrep",                    (char*) &wsrep_show_status,       SHOW_FUNC},
 #endif

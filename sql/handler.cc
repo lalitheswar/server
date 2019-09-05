@@ -1537,8 +1537,9 @@ int ha_commit_trans(THD *thd, bool all)
 #endif /* WITH_WSREP */
     error= ha_commit_one_phase(thd, all);
 #ifdef WITH_WSREP
-    if (run_wsrep_hooks)
-      error= error || wsrep_after_commit(thd, all);
+    // Here in case of error we must return 2 for inconsistency
+    if (run_wsrep_hooks && !error)
+      error= wsrep_after_commit(thd, all) ? 2 : 0;
 #endif /* WITH_WSREP */
     goto done;
   }
@@ -1607,8 +1608,10 @@ int ha_commit_trans(THD *thd, bool all)
 
   error= commit_one_phase_2(thd, all, trans, is_real_trans) ? 2 : 0;
 #ifdef WITH_WSREP
-  if (run_wsrep_hooks && (error || (error = wsrep_after_commit(thd, all))))
+  if (run_wsrep_hooks &&
+      (error || (error = wsrep_after_commit(thd, all))))
   {
+    error = 2;
     mysql_mutex_lock(&thd->LOCK_thd_data);
     if (wsrep_must_abort(thd))
     {
@@ -6452,7 +6455,7 @@ static int wsrep_after_row(THD *thd)
 #endif /* WITH_WSREP */
 
 static int check_duplicate_long_entry_key(TABLE *table, handler *h,
-                                          uchar *new_rec, uint key_no)
+                                          const uchar *new_rec, uint key_no)
 {
   Field *hash_field;
   int result, error= 0;
@@ -6541,7 +6544,8 @@ exit:
     unique constraint on long columns.
     @returns 0 if no duplicate else returns error
   */
-static int check_duplicate_long_entries(TABLE *table, handler *h, uchar *new_rec)
+static int check_duplicate_long_entries(TABLE *table, handler *h,
+                                        const uchar *new_rec)
 {
   table->file->errkey= -1;
   int result;
@@ -6610,7 +6614,7 @@ static int check_duplicate_long_entries_update(TABLE *table, handler *h, uchar *
   return error;
 }
 
-int handler::ha_write_row(uchar *buf)
+int handler::ha_write_row(const uchar *buf)
 {
   int error;
   Log_func *log_func= Write_rows_log_event::binlog_row_logging_function;
@@ -6699,7 +6703,7 @@ int handler::ha_update_row(const uchar *old_data, const uchar *new_data)
   Update first row. Only used by sequence tables
 */
 
-int handler::update_first_row(uchar *new_data)
+int handler::update_first_row(const uchar *new_data)
 {
   int error;
   if (likely(!(error= ha_rnd_init(1))))
@@ -7636,7 +7640,8 @@ static bool is_versioning_timestamp(const Create_field *f)
 
 static bool is_some_bigint(const Create_field *f)
 {
-  return f->type_handler() == &type_handler_longlong ||
+  return f->type_handler() == &type_handler_slonglong ||
+         f->type_handler() == &type_handler_ulonglong ||
          f->type_handler() == &type_handler_vers_trx_id;
 }
 
