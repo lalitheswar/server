@@ -4423,6 +4423,8 @@ buf_block_for_zip_page(
 			if (err) {
 				*err = DB_PAGE_CORRUPTED;
 			}
+
+			*zip_err = FAIL;
 			return NULL;
 		}
 	}
@@ -4866,9 +4868,9 @@ evict_from_pool:
 				goto loop;
 			} else if (zip_err == POOL_EVICT) {
 				goto evict_from_pool;
+			} else if (zip_err == FAIL) {
+				return NULL;
 			}
-
-			return NULL;
 		}
 
 		fix_block = block;

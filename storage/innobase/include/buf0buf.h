@@ -137,6 +137,7 @@ enum zip_err_t {
 	RETRY_AGAIN,
 	RETRY_AGAIN_AND_ASSIGN,
 	POOL_EVICT,
+	FAIL,
 	SUCCESS
 };
 
