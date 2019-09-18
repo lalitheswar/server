@@ -4495,17 +4495,19 @@ buf_index_page_get(
 			return NULL;
 		}
 
-		rw_lock_x_lock(&block->lock);
+		if (page_is_leaf(block->frame)) {
+			rw_lock_x_lock(&block->lock);
 
-		if (block->page.is_ibuf_exist()) {
+			if (block->page.is_ibuf_exist()) {
+				/* Merge the page from change buffer. */
+				ibuf_merge_or_delete_for_page(
+					block, block->page.id,
+					zip_size, true);
+				block->page.set_ibuf_exist(false);
+			}
 
-			/* Merge the page from change buffer. */
-			ibuf_merge_or_delete_for_page(
-				block, block->page.id, zip_size, true);
-			block->page.set_ibuf_exist(false);
+			rw_lock_x_unlock(&block->lock);
 		}
-
-		rw_lock_x_unlock(&block->lock);
 
 		mtr->lock_page(block, rw_latch, file, line);
 

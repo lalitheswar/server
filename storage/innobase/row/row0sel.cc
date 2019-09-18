@@ -1130,11 +1130,11 @@ re_scan:
 			ulint		page_no = page_get_page_no(
 				btr_pcur_get_page(pcur));
 
-			cur_block = buf_index_page_get(
-				index, page_id_t(index->table->space_id, page_no),
+			cur_block = buf_page_get_gen(
+				page_id_t(index->table->space_id, page_no),
 				index->table->space->zip_size(),
 				RW_X_LATCH, NULL, BUF_GET,
-				__FILE__, __LINE__, mtr, &err);
+				__FILE__, __LINE__, mtr, false, &err);
 		} else {
 			mtr->start();
 			goto func_end;
