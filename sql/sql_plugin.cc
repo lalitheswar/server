@@ -222,6 +222,8 @@ static struct
   We are always manipulating ref count, so a rwlock here is unneccessary.
 */
 mysql_mutex_t LOCK_plugin;
+#define thd_none ((THD *) &LOCK_plugin)
+static THD *lock_plugin_owner= thd_none;
 static DYNAMIC_ARRAY plugin_dl_array;
 static DYNAMIC_ARRAY plugin_array;
 static HASH plugin_hash[MYSQL_MAX_PLUGIN_TYPE_NUM];
@@ -324,6 +326,18 @@ static void plugin_vars_free_values(sys_var *vars);
 static void restore_ptr_backup(uint n, st_ptr_backup *backup);
 static void intern_plugin_unlock(LEX *lex, plugin_ref plugin);
 static void reap_plugins(void);
+
+#ifdef DBUG_OFF
+static inline void assert_lock_plugin_owner() {}
+#else
+static  void assert_lock_plugin_owner()
+{
+  if (lock_plugin_owner == thd_none)
+    mysql_mutex_assert_owner(&LOCK_plugin);
+  else
+    DBUG_ASSERT(lock_plugin_owner == current_thd);
+}
+#endif
 
 bool plugin_is_forced(struct st_plugin_int *p)
 {
@@ -721,7 +735,7 @@ static st_plugin_dl *plugin_dl_add(const LEX_CSTRING *dl, myf MyFlags)
   DBUG_ENTER("plugin_dl_add");
   DBUG_PRINT("enter", ("dl->str: '%s', dl->length: %d",
                        dl->str, (int) dl->length));
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
   plugin_dir_len= strlen(opt_plugin_dir);
   /*
     Ensure that the dll doesn't have a path.
@@ -857,7 +871,7 @@ static void plugin_dl_del(struct st_plugin_dl *plugin_dl)
   if (!plugin_dl)
     DBUG_VOID_RETURN;
 
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
 
   /* Do not remove this element, unless no other plugin uses this dll. */
   if (! --plugin_dl->ref_count)
@@ -878,7 +892,7 @@ static struct st_plugin_int *plugin_find_internal(const LEX_CSTRING *name,
   if (! initialized)
     DBUG_RETURN(0);
 
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
 
   if (type == MYSQL_ANY_PLUGIN)
   {
@@ -943,7 +957,7 @@ static plugin_ref intern_plugin_lock(LEX *lex, plugin_ref rc,
   st_plugin_int *pi= plugin_ref_to_int(rc);
   DBUG_ENTER("intern_plugin_lock");
 
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
 
   if (pi->state & state_mask)
   {
@@ -1018,10 +1032,12 @@ plugin_ref plugin_lock(THD *thd, plugin_ref ptr)
     DBUG_RETURN(ptr);
   }
 #endif
-  mysql_mutex_lock(&LOCK_plugin);
+  if (lock_plugin_owner != thd)
+    mysql_mutex_lock(&LOCK_plugin);
   plugin_ref_to_int(ptr)->locks_total++;
   rc= intern_plugin_lock(lex, ptr);
-  mysql_mutex_unlock(&LOCK_plugin);
+  if (lock_plugin_owner != thd)
+    mysql_mutex_unlock(&LOCK_plugin);
   DBUG_RETURN(rc);
 }
 
@@ -1042,10 +1058,12 @@ plugin_ref plugin_lock_by_name(THD *thd, const LEX_CSTRING *name, int type)
   plugin_ref rc= NULL;
   st_plugin_int *plugin;
   DBUG_ENTER("plugin_lock_by_name");
-  mysql_mutex_lock(&LOCK_plugin);
+  if (lock_plugin_owner != thd)
+    mysql_mutex_lock(&LOCK_plugin);
   if ((plugin= plugin_find_internal(name, type)))
     rc= intern_plugin_lock(lex, plugin_int_to_ref(plugin));
-  mysql_mutex_unlock(&LOCK_plugin);
+  if (lock_plugin_owner != thd)
+    mysql_mutex_unlock(&LOCK_plugin);
   DBUG_RETURN(rc);
 }
 
@@ -1259,7 +1277,7 @@ static void plugin_deinitialize(struct st_plugin_int *plugin, bool ref_check)
 static void plugin_del(struct st_plugin_int *plugin)
 {
   DBUG_ENTER("plugin_del");
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
   /* Free allocated strings before deleting the plugin. */
   plugin_vars_free_values(plugin->system_vars);
   restore_ptr_backup(plugin->nbackups, plugin->ptr_backup);
@@ -1280,7 +1298,7 @@ static void reap_plugins(void)
   uint count;
   struct st_plugin_int *plugin, **reap, **list;
 
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
 
   if (!reap_needed)
     return;
@@ -1325,7 +1343,7 @@ static void intern_plugin_unlock(LEX *lex, plugin_ref plugin)
   st_plugin_int *pi;
   DBUG_ENTER("intern_plugin_unlock");
 
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
 
   if (!plugin)
     DBUG_VOID_RETURN;
@@ -1410,7 +1428,7 @@ static int plugin_initialize(MEM_ROOT *tmp_root, struct st_plugin_int *plugin,
   int ret= 1;
   DBUG_ENTER("plugin_initialize");
 
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
   uint state= plugin->state;
   DBUG_ASSERT(state == PLUGIN_IS_UNINITIALIZED);
 
@@ -1847,13 +1865,13 @@ static void plugin_load(MEM_ROOT *tmp_root)
     /*
       there're no other threads running yet, so we don't need a mutex.
       but plugin_add() before is designed to work in multi-threaded
-      environment, and it uses mysql_mutex_assert_owner(), so we lock
-      the mutex here to satisfy the assert
+      environment, and it checks the owner of the LOCK_plugin mutex
+      so set it appropriately.
     */
-    mysql_mutex_lock(&LOCK_plugin);
+    lock_plugin_owner= new_thd;
     plugin_add(tmp_root, &name, &dl, MYF(ME_ERROR_LOG));
     free_root(tmp_root, MYF(MY_MARK_BLOCKS_FREE));
-    mysql_mutex_unlock(&LOCK_plugin);
+    lock_plugin_owner= thd_none;
   }
   if (unlikely(error > 0))
     sql_print_error(ER_THD(new_thd, ER_GET_ERRNO), my_errno,
@@ -2096,7 +2114,7 @@ static bool finalize_install(THD *thd, TABLE *table, const LEX_CSTRING *name,
   struct st_plugin_int *tmp= plugin_find_internal(name, MYSQL_ANY_PLUGIN);
   int error;
   DBUG_ASSERT(tmp);
-  mysql_mutex_assert_owner(&LOCK_plugin); // because of tmp->state
+  assert_lock_plugin_owner();
 
   if (tmp->state != PLUGIN_IS_UNINITIALIZED)
   {
@@ -2198,6 +2216,7 @@ bool mysql_install_plugin(THD *thd, const LEX_CSTRING *name,
     mysql_audit_acquire_plugins(thd, event_class_mask);
 
   mysql_mutex_lock(&LOCK_plugin);
+  lock_plugin_owner= thd;
   error= plugin_add(thd->mem_root, name, &dl, MYF(0));
   if (unlikely(error))
     goto err;
@@ -2222,6 +2241,7 @@ bool mysql_install_plugin(THD *thd, const LEX_CSTRING *name,
   }
 err:
   global_plugin_version++;
+  lock_plugin_owner= thd_none;
   mysql_mutex_unlock(&LOCK_plugin);
   if (argv)
     free_defaults(argv);
@@ -2235,7 +2255,7 @@ WSREP_ERROR_LABEL:
 static bool do_uninstall(THD *thd, TABLE *table, const LEX_CSTRING *name)
 {
   struct st_plugin_int *plugin;
-  mysql_mutex_assert_owner(&LOCK_plugin);
+  assert_lock_plugin_owner();
 
   if (!(plugin= plugin_find_internal(name, MYSQL_ANY_PLUGIN)) ||
       plugin->state & (PLUGIN_IS_UNINITIALIZED | PLUGIN_IS_DYING))
