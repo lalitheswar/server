@@ -3,7 +3,26 @@ create table t2(f1 int primary key, f2 int, index idx(f2))engine=innodb;
 insert into t1 values(1, 2);
 insert into t2 values(1, 2);
 SET GLOBAL innodb_fast_shutdown = 0;
-# Restart the server with innodb_force_recovery as 5.
+# restart: --innodb-force-recovery=4
+select * from t1;
+f1	f2
+1	2
+begin;
+insert into t1 values(2, 3);
+rollback;
+alter table t1 add f3 int not null, algorithm=copy;
+alter table t1 add f4 int not null, algorithm=inplace;
+drop index idx on t1;
+update t1 set f1=3 where f2=2;
+create table t3(f1 int not null)engine=innodb;
+drop table t3;
+rename table t1 to t3;
+rename table t3 to t1;
+truncate table t1;
+show tables;
+Tables_in_test
+t1
+t2
 # restart: --innodb-force-recovery=5
 select * from t2;
 f1	f2
@@ -34,7 +53,6 @@ show tables;
 Tables_in_test
 t1
 t2
-# Restart the server with innodb_force_recovery as 6.
 # restart: --innodb-force-recovery=6
 select * from t2;
 f1	f2
@@ -63,7 +81,6 @@ show tables;
 Tables_in_test
 t1
 t2
-# Restart the server with innodb_force_recovery=2
 # restart: --innodb-force-recovery=2
 select * from t2;
 f1	f2
@@ -77,7 +94,6 @@ drop table t1;
 disconnect con1;
 connection default;
 # Kill the server
-# Restart the server with innodb_force_recovery=3
 # restart: --innodb-force-recovery=3
 SET TRANSACTION ISOLATION LEVEL READ UNCOMMITTED;
 select * from t2;
