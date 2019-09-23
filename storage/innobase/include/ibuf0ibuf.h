@@ -317,16 +317,10 @@ ibuf_insert(
 	ulint			zip_size,
 	que_thr_t*		thr);
 
-/* Check whether the change buffer changes exists for the particular page id.
-@param[in,out]	block		if page has been read from disk,
-				pointer to the page x-latched, else NULL
-@param[in]	page_id		page id of the index page
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@return true if change buffer exists. */
-bool ibuf_page_exists(
-	buf_block_t*	block,
-	const page_id_t	page_id,
-	ulint		zip_size);
+/** Check whether buffered changes exist for a page.
+@param[in,out]	bpage	buffer page
+@return whether buffered changes exist */
+bool ibuf_page_exists(const buf_page_t& bpage);
 
 /** When an index page is read from a disk to the buffer pool, this function
 applies any buffered operations to the page and deletes the entries from the

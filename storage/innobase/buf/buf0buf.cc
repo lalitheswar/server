@@ -4255,26 +4255,22 @@ buf_wait_for_read(
 	}
 }
 
-/** Get block for the compressed page.
+/** Get the uncompressed block for a ROW_FORMAT=COMPRESSED page.
 @param[in]	buf_pool	buffer pool instance
-@param[in]	fix_block	block which was read from file
-@param[in]	page_id		page id which was read
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size
+@param[in]	bpage		block which was read from file
 @param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in]	file		file name
 @param[in]	line		line where called
 @param[out]	err		DB_SUCCESS or error code
 @param[out]	zip_err		Compressed error
-@param[in]	ibuf_merge	merge the secondary index page with
-				change buffer changes.
-@return pointer to the block or NULL */
+@param[in]	ibuf_merge	whether to merge the change buffer to the page
+@return pointer to the block
+@return	NULL if the page cannot be uncompressed at the moment */
 buf_block_t*
 buf_block_for_zip_page(
 	buf_pool_t*	buf_pool,
-	buf_block_t*	fix_block,
-	const page_id_t	page_id,
-	ulint		zip_size,
+	buf_page_t*	bpage,
 	ulint		mode,
 	const char*	file,
 	unsigned	line,
@@ -4282,9 +4278,7 @@ buf_block_for_zip_page(
 	zip_err_t*	zip_err,
 	bool		ibuf_merge)
 {
-	buf_page_t*	bpage = &fix_block->page;
 	buf_block_t*	block;
-
 
 	/* Note: We have already buffer fixed this block. */
 	if (bpage->buf_fix_count > 1
@@ -4293,7 +4287,7 @@ buf_block_for_zip_page(
 		/* This condition often occurs when the buffer
 		is not buffer-fixed, but I/O-fixed by
 		buf_page_init_for_read(). */
-		fix_block->unfix();
+		bpage->unfix();
 
 		/* The block is buffer-fixed or I/O-fixed.
 		Try again later. */
@@ -4313,6 +4307,7 @@ buf_block_for_zip_page(
 	uncompressed page. */
 
 	block = buf_LRU_get_free_block(buf_pool);
+	const page_id_t page_id (bpage->id);
 
 	buf_pool_mutex_enter(buf_pool);
 
@@ -4324,12 +4319,12 @@ buf_block_for_zip_page(
 	/* Buffer-fixing prevents the page_hash from changing. */
 	ut_ad(bpage == buf_page_hash_get_low(buf_pool, page_id));
 
-	fix_block->unfix();
+	bpage->unfix();
 
 	buf_page_mutex_enter(block);
 	mutex_enter(&buf_pool->zip_mutex);
 
-	fix_block = block;
+	buf_block_t* fix_block = block;
 
 	if (bpage->buf_fix_count > 0
 	    || buf_page_get_io_fix(bpage) != BUF_IO_NONE) {
@@ -4406,34 +4401,31 @@ buf_block_for_zip_page(
 	/* Decompress the page while not holding
 	buf_pool->mutex or block->mutex. */
 
-	{
-		bool	success = buf_zip_decompress(block, TRUE);
+	if (!buf_zip_decompress(block, TRUE)) {
+		buf_pool_mutex_enter(buf_pool);
+		buf_page_mutex_enter(fix_block);
+		buf_block_set_io_fix(fix_block, BUF_IO_NONE);
+		buf_page_mutex_exit(fix_block);
 
-		if (!success) {
-			buf_pool_mutex_enter(buf_pool);
-			buf_page_mutex_enter(fix_block);
-			buf_block_set_io_fix(fix_block, BUF_IO_NONE);
-			buf_page_mutex_exit(fix_block);
+		--buf_pool->n_pend_unzip;
+		fix_block->unfix();
+		buf_pool_mutex_exit(buf_pool);
+		rw_lock_x_unlock(&fix_block->lock);
 
-			--buf_pool->n_pend_unzip;
-			fix_block->unfix();
-			buf_pool_mutex_exit(buf_pool);
-			rw_lock_x_unlock(&fix_block->lock);
-
-			if (err) {
-				*err = DB_PAGE_CORRUPTED;
-			}
-
-			*zip_err = FAIL;
-			return NULL;
+		if (err) {
+			*err = DB_PAGE_CORRUPTED;
 		}
+
+		*zip_err = FAIL;
+		return NULL;
 	}
 
 	if (!access_time && !recv_no_ibuf_operations) {
 		if (ibuf_merge) {
 			ibuf_merge_or_delete_for_page(
-				block, block->page.id, zip_size, true);
-		} else if (ibuf_page_exists(block, block->page.id, zip_size)) {
+				block, block->page.id, block->zip_size(),
+				true);
+		} else if (ibuf_page_exists(block->page)) {
 			block->page.set_ibuf_exist(true);
 		}
 	}
@@ -4441,9 +4433,7 @@ buf_block_for_zip_page(
 	buf_pool_mutex_enter(buf_pool);
 
 	buf_page_mutex_enter(fix_block);
-
 	buf_block_set_io_fix(fix_block, BUF_IO_NONE);
-
 	buf_page_mutex_exit(fix_block);
 
 	--buf_pool->n_pend_unzip;
@@ -4861,9 +4851,8 @@ evict_from_pool:
 		}
 
 		block = buf_block_for_zip_page(
-				buf_pool, fix_block, page_id,
-				zip_size, mode, file, line,
-				err, &zip_err, allow_ibuf_merge);
+			buf_pool, &fix_block->page, mode, file, line,
+			err, &zip_err, allow_ibuf_merge);
 
 		if (block == NULL) {
 			if (zip_err == RETRY_AGAIN) {
@@ -6344,11 +6333,8 @@ database_corrupted:
 					bpage->zip_size(), true);
 			} else {
 				bpage->set_ibuf_exist(
-					ibuf_page_exists(
-						(buf_block_t*) bpage, bpage->id,
-						bpage->zip_size()));
+					ibuf_page_exists(*bpage));
 			}
-
 		}
 
 		space->release_for_io();

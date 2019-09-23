@@ -93,40 +93,32 @@ buf_read_page_handle_error(
 
 /** Merge the change buffer changes for the buffered pages.
 @param[in]	page_id		page id to be merged
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED format. */
-static
-void buf_merge_buffered_page(
-	const page_id_t	page_id,
-	ulint		zip_size)
+@param[in]	zip_size	0, or ROW_FORMAT=COMPRESSED page size */
+static void buf_merge_buffered_page(const page_id_t page_id)
 {
 	buf_pool_t*	buf_pool = buf_pool_get(page_id);
-	buf_block_t*	block;
-	buf_page_t*	bpage;
-	rw_lock_t*	hash_lock;
 
 	buf_pool_mutex_enter(buf_pool);
 
-	hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
+	rw_lock_t* hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
 
 	rw_lock_x_lock(hash_lock);
 
-	bpage = buf_page_hash_get_low(buf_pool, page_id);
+	buf_page_t* bpage = buf_page_hash_get_low(buf_pool, page_id);
+	bpage->fix();
+	rw_lock_x_unlock(hash_lock);
+	buf_pool_mutex_exit(buf_pool);
 
 	if (buf_page_get_state(bpage) == BUF_BLOCK_ZIP_PAGE) {
-		block = (buf_block_t*) bpage;
-		bpage->fix();
-		rw_lock_x_unlock(hash_lock);
-		buf_pool_mutex_exit(buf_pool);
-
 		zip_err_t	zip_err;
-		block = buf_block_for_zip_page(
-				buf_pool, block, page_id, zip_size, BUF_GET,
-				__FILE__, __LINE__, NULL, &zip_err, true);
+		buf_block_t*	block = buf_block_for_zip_page(
+			buf_pool, bpage, BUF_GET,
+			__FILE__, __LINE__, NULL, &zip_err, true);
 
 		ut_ad(block != NULL);
 		ut_ad(zip_err == SUCCESS);
 
-		if (block->page.buf_fix_count > 0) {
+		if (block->page.buf_fix_count > 0) { // FIXME: why this?
 			block->unfix();
 		}
 
@@ -135,25 +127,13 @@ void buf_merge_buffered_page(
 
 	ut_ad(buf_page_get_state(bpage) == BUF_BLOCK_FILE_PAGE);
 
-	block = buf_page_get_block(bpage);
-
-	ut_ad(block != NULL);
-
-	buf_page_mutex_enter(block);
-
-	rw_lock_x_unlock(hash_lock);
-
-	block->fix();
-
-	buf_page_mutex_exit(block);
-
-	buf_pool_mutex_exit(buf_pool);
+	buf_block_t* block = reinterpret_cast<buf_block_t*>(bpage);
 
 	rw_lock_x_lock(&block->lock);
 
 	if (block->page.is_ibuf_exist()) {
 		ibuf_merge_or_delete_for_page(
-			block, page_id, zip_size, true);
+			block, page_id, block->zip_size(), true);
 		block->page.set_ibuf_exist(false);
 	}
 
@@ -178,7 +158,7 @@ void buf_read_and_merge_ibuf_page(
 			err, mode, page_id, zip_size, true);
 
 	if (bpage == NULL) {
-		return buf_merge_buffered_page(page_id, zip_size);
+		return buf_merge_buffered_page(page_id);
 	}
 
 	DBUG_LOG("ib_buf",

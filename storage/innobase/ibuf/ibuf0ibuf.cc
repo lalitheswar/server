@@ -4226,60 +4226,41 @@ func_exit:
 	return(TRUE);
 }
 
-/* Check whether the change buffer changes exists for the particular page id.
-@param[in,out]	block		if page has been read from disk,
-				pointer to the page x-latched, else NULL
-@param[in]	page_id		page id of the index page
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size or 0
-@return true if change buffer exists. */
-bool ibuf_page_exists(
-	buf_block_t*	block,
-	const page_id_t	page_id,
-	ulint		zip_size)
+/** Check whether buffered changes exist for a page.
+@param[in,out]	block		page
+@return whether buffered changes exist */
+bool ibuf_page_exists(const buf_page_t& bpage)
 {
-	mtr_t	mtr;
-
-	ut_ad(block == NULL || page_id == block->page.id);
-	ut_ad(block == NULL || buf_block_get_io_fix(block) == BUF_IO_READ
+	ut_ad(buf_page_get_io_fix(&bpage) == BUF_IO_READ
 	      || recv_recovery_is_on());
+	ut_ad(!fsp_is_system_temporary(bpage.id.space()));
 
-	if (trx_sys_hdr_page(page_id)
-	    || fsp_is_system_temporary(page_id.space())) {
+	const ulint physical_size = bpage.physical_size();
+
+	if (ibuf_fixed_addr_page(bpage.id, physical_size)
+	    || fsp_descr_page(bpage.id, physical_size)) {
 		return false;
 	}
 
-	const ulint physical_size = zip_size ? zip_size : srv_page_size;
+	if (fil_space_t* space = fil_space_acquire_silent(bpage.id.space())) {
+		mtr_t mtr;
+		bool bitmap_bits = false;
 
-	if (ibuf_fixed_addr_page(page_id, physical_size)
-	    || fsp_descr_page(page_id, physical_size)) {
-		return false;
+		ibuf_mtr_start(&mtr);
+		if (const page_t* bitmap_page = ibuf_bitmap_get_map_page(
+			    bpage.id, bpage.zip_size(), &mtr)) {
+			bitmap_bits = ibuf_bitmap_page_get_bits(
+				bitmap_page, bpage.id, bpage.zip_size(),
+				IBUF_BITMAP_BUFFERED, &mtr) != 0;
+		}
+		ibuf_mtr_commit(&mtr);
+
+		space->release();
+
+		return bitmap_bits;
 	}
 
-	fil_space_t*	space = fil_space_acquire_silent(page_id.space());
-
-	if (space == NULL) {
-		return false;
-	}
-
-	page_t*	bitmap_page = NULL;
-	ulint	bitmap_bits = 0;
-
-	ibuf_mtr_start(&mtr);
-
-	bitmap_page = ibuf_bitmap_get_map_page(page_id, zip_size, &mtr);
-
-	if (bitmap_page
-	    && fil_page_get_type(bitmap_page) != FIL_PAGE_TYPE_ALLOCATED) {
-		bitmap_bits = ibuf_bitmap_page_get_bits(
-				bitmap_page, page_id, zip_size,
-				IBUF_BITMAP_BUFFERED, &mtr);
-	}
-
-	ibuf_mtr_commit(&mtr);
-
-	space->release();
-
-	return bitmap_bits;
+	return false;
 }
 
 /** When an index page is read from a disk to the buffer pool, this function
