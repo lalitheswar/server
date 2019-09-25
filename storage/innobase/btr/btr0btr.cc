@@ -365,7 +365,7 @@ btr_root_adjust_on_import(
 		page_id_t(table->space->id, index->page),
 		table->space->zip_size(), RW_X_LATCH, NULL, BUF_GET,
 		__FILE__, __LINE__,
-		&mtr, false, &err);
+		&mtr, &err);
 	if (!block) {
 		ut_ad(err != DB_SUCCESS);
 		goto func_exit;

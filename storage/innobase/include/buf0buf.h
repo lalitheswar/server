@@ -365,8 +365,7 @@ NOTE! The following macros should be used instead of buf_page_get_gen,
 to improve debugging. Only values RW_S_LATCH and RW_X_LATCH are allowed
 in LA! */
 #define buf_page_get(ID, SIZE, LA, MTR)					\
-	buf_page_get_gen(ID, SIZE, LA, NULL, BUF_GET, __FILE__,		\
-			 __LINE__, MTR)
+	buf_page_get_gen(ID, SIZE, LA, NULL, BUF_GET, __FILE__, __LINE__, MTR)
 
 /**************************************************************//**
 Use these macros to bufferfix a page with no latching. Remember not to
@@ -473,9 +472,9 @@ BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in]	file			file name
 @param[in]	line			line where called
 @param[in]	mtr			mini-transaction
+@param[out]	err			DB_SUCCESS or error code
 @param[in]	allow_ibuf_merge	Allow change buffer merge while
 reading the pages from file.
-@param[out]	err			DB_SUCCESS or error code
 @return pointer to the block or NULL */
 buf_block_t*
 buf_page_get_gen(
@@ -487,15 +486,15 @@ buf_page_get_gen(
 	const char*		file,
 	unsigned		line,
 	mtr_t*			mtr,
-	bool			allow_ibuf_merge=false,
-	dberr_t*		err=NULL);
+	dberr_t*		err = NULL,
+	bool			allow_ibuf_merge = false);
 
 /** This is the general function used to get access to database page and
 does the merging of change buffer changes if it exists for the given page id.
 @param[in]	index		index of the page to be fetched
-@param[in]	page_id		page_id
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
+@param[in]	id		page_id
+@param[in]	zs		ROW_FORMAT=COMPRESSED page size, or 0
+@param[in]	rw		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
 @param[in]	guess		guessed block or NULL
 @param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
@@ -503,19 +502,11 @@ BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in]	line		line number of caller
 @param[in,out]	mtr		mini-transaction
 @param[out]	err		DB_SUCCESS or error code
-@return pointer to the block or NULL */
-buf_block_t*
-buf_index_page_get(
-	const dict_index_t*	index,
-	const page_id_t		page_id,
-	ulint			zip_size,
-	ulint			rw_latch,
-	buf_block_t*		guess,
-	ulint			mode,
-	const char*		file,
-	unsigned		line,
-	mtr_t*			mtr,
-	dberr_t*		err);
+@return pointer to the block
+@retval NULL if the block cannot be retrieved */
+#define buf_index_page_get(index, id, zs, rw, guess, mode, f, l, mtr, err) \
+	buf_page_get_gen(id, zs, rw, guess, mode, f, l, mtr, err,	\
+			 !(index).is_clust())
 
 /** Initialize a page in the buffer pool. The page is usually not read
 from a file even if it cannot be found in the buffer buf_pool. This is one

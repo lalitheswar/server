@@ -1514,7 +1514,7 @@ dict_stats_analyze_index_below_cur(
 
 		dberr_t err = DB_SUCCESS;
 
-		block = buf_index_page_get(index, page_id, zip_size,
+		block = buf_index_page_get(*index, page_id, zip_size,
 					   RW_S_LATCH, NULL, BUF_GET,
 					   __FILE__, __LINE__, &mtr, &err);
 

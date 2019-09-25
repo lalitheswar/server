@@ -233,7 +233,7 @@ inline buf_block_t* btr_block_get_func(const dict_index_t& index, ulint page,
 	dberr_t err;
 
 	if (buf_block_t* block = buf_index_page_get(
-		    &index, page_id_t(index.table->space->id, page),
+		    index, page_id_t(index.table->space->id, page),
 		    index.table->space->zip_size(), mode, NULL, BUF_GET,
 		    file, line, mtr, &err)) {
 		ut_ad(err == DB_SUCCESS);

@@ -1134,7 +1134,7 @@ re_scan:
 				page_id_t(index->table->space_id, page_no),
 				index->table->space->zip_size(),
 				RW_X_LATCH, NULL, BUF_GET,
-				__FILE__, __LINE__, mtr, false, &err);
+				__FILE__, __LINE__, mtr, &err);
 		} else {
 			mtr->start();
 			goto func_end;
@@ -3312,7 +3312,7 @@ Row_sel_get_clust_rec_for_mysql::operator()(
 			same as btr_pcur_get_block(prebuilt->pcur),
 			and is it not unsafe to use RW_NO_LATCH here? */
 			buf_block_t*	block = buf_index_page_get(
-				sec_index,
+				*sec_index,
 				btr_pcur_get_block(prebuilt->pcur)->page.id,
 				btr_pcur_get_block(prebuilt->pcur)->zip_size(),
 				RW_NO_LATCH, NULL, BUF_GET,

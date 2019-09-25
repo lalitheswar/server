@@ -4447,67 +4447,6 @@ buf_block_for_zip_page(
 	return block;
 }
 
-/** This is the general function used to get access to database page and
-does the merging of change buffer changes if it exists for the given page id.
-@param[in]	index		index of the page to be fetched
-@param[in]	page_id		page_id
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	rw_latch	RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
-@param[in]	guess		guessed block or NULL
-@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name
-@param[in]	line		line where called
-@param[in]	mtr		mini-transaction
-@param[out]	err		DB_SUCCESS or error code
-@return pointer to the block or NULL */
-buf_block_t*
-buf_index_page_get(
-       const dict_index_t*     index,
-       const page_id_t         page_id,
-       ulint                   zip_size,
-       ulint                   rw_latch,
-       buf_block_t*            guess,
-       ulint                   mode,
-       const char*             file,
-       unsigned                line,
-       mtr_t*                  mtr,
-       dberr_t*                err)
-{
-	bool sec_index = (index != NULL && !dict_index_is_clust(index));
-
-	if (sec_index) {
-		buf_block_t* block = buf_page_get_gen(
-				page_id, zip_size, rw_latch, guess,
-				mode, file, line, mtr, sec_index, err);
-
-		if (!block) {
-			return NULL;
-		}
-
-		if (page_is_leaf(block->frame)) {
-			rw_lock_x_lock(&block->lock);
-
-			if (block->page.is_ibuf_exist()) {
-				/* Merge the page from change buffer. */
-				ibuf_merge_or_delete_for_page(
-					block, block->page.id,
-					zip_size, true);
-				block->page.set_ibuf_exist(false);
-			}
-
-			rw_lock_x_unlock(&block->lock);
-		}
-
-		mtr->lock_page(block, rw_latch, file, line);
-
-		return block;
-	}
-
-	return buf_page_get_gen(page_id, zip_size, rw_latch, guess,
-				mode, file, line, mtr, false, err);
-}
-
 /** This is the general function used to get access to a database page.
 @param[in]	page_id			page id
 @param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
@@ -4518,9 +4457,9 @@ BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in]	file			file name
 @param[in]	line			line where called
 @param[in]	mtr			mini-transaction
+@param[out]	err			DB_SUCCESS or error code
 @param[in]	allow_ibuf_merge	Allow change buffer merge to happen
 while reading the page from file
-@param[out]	err		DB_SUCCESS or error code
 then it makes sure that it does merging of change buffer changes while
 reading the page from file.
 @return pointer to the block or NULL */
@@ -4534,8 +4473,8 @@ buf_page_get_gen(
 	const char*		file,
 	unsigned		line,
 	mtr_t*			mtr,
-	bool			allow_ibuf_merge,
-	dberr_t*		err)
+	dberr_t*		err,
+	bool			allow_ibuf_merge)
 {
 	buf_block_t*	block;
 	unsigned	access_time;
@@ -4854,17 +4793,15 @@ evict_from_pool:
 			buf_pool, &fix_block->page, mode, file, line,
 			err, &zip_err, allow_ibuf_merge);
 
-		if (block == NULL) {
-			if (zip_err == RETRY_AGAIN) {
-				goto loop;
-			} else if (zip_err == POOL_EVICT) {
-				goto evict_from_pool;
-			} else if (zip_err == FAIL) {
-				return NULL;
-			}
+		if (block) {
+			fix_block = block;
+		} else if (zip_err == RETRY_AGAIN) {
+			goto loop;
+		} else if (zip_err == POOL_EVICT) {
+			goto evict_from_pool;
+		} else if (zip_err == FAIL) {
+			return NULL;
 		}
-
-		fix_block = block;
 
 		if (zip_err == RETRY_AGAIN_AND_ASSIGN) {
 			goto loop;
@@ -5036,6 +4973,21 @@ evict_from_pool:
 	}
 
 	if (allow_ibuf_merge) {
+		if (page_is_leaf(fix_block->frame)) {
+			rw_lock_x_lock(&fix_block->lock);
+
+			if (fix_block->page.is_ibuf_exist()) {
+				/* Merge the page from change buffer. */
+				ibuf_merge_or_delete_for_page(
+					fix_block, page_id, zip_size, true);
+				fix_block->page.set_ibuf_exist(false);
+			}
+
+			rw_lock_x_unlock(&fix_block->lock);
+		}
+
+		// FIXME: move this earlier if possible (avoid unlock/lock)
+		mtr->lock_page(fix_block, rw_latch, file, line);
 		return fix_block;
 	}
 

@@ -702,10 +702,9 @@ ibuf_bitmap_get_map_page_func(
 	buf_block_t*	block = NULL;
 	dberr_t		err = DB_SUCCESS;
 
-	block = buf_index_page_get(
-			NULL, ibuf_bitmap_page_no_calc(page_id, zip_size),
-			zip_size, RW_X_LATCH, NULL, BUF_GET, file, line, mtr,
-			&err);
+	block = buf_page_get_gen(
+		ibuf_bitmap_page_no_calc(page_id, zip_size),
+		zip_size, RW_X_LATCH, NULL, BUF_GET, file, line, mtr, &err);
 
 	if (err != DB_SUCCESS) {
 		return NULL;
@@ -1054,8 +1053,8 @@ ibuf_page_low(
 		while the page is linked to the insert buffer b-tree. */
 		dberr_t err = DB_SUCCESS;
 
-		buf_block_t* block = buf_index_page_get(
-			NULL, ibuf_bitmap_page_no_calc(page_id, zip_size),
+		buf_block_t* block = buf_page_get_gen(
+			ibuf_bitmap_page_no_calc(page_id, zip_size),
 			zip_size, RW_NO_LATCH, NULL, BUF_GET_NO_LATCH,
 			file, line, &local_mtr, &err);
 

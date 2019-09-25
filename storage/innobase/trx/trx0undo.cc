@@ -1415,7 +1415,7 @@ trx_undo_assign(trx_t* trx, dberr_t* err, mtr_t* mtr)
 			0, RW_X_LATCH,
 			buf_pool_is_obsolete(undo->withdraw_clock)
 			? NULL : undo->guess_block,
-			BUF_GET, __FILE__, __LINE__, mtr, false, err);
+			BUF_GET, __FILE__, __LINE__, mtr, err);
 	}
 
 	trx_rseg_t* rseg = trx->rsegs.m_redo.rseg;
@@ -1471,7 +1471,7 @@ trx_undo_assign_low(trx_t* trx, trx_rseg_t* rseg, trx_undo_t** undo,
 			0, RW_X_LATCH,
 			buf_pool_is_obsolete((*undo)->withdraw_clock)
 			? NULL : (*undo)->guess_block,
-			BUF_GET, __FILE__, __LINE__, mtr, false, err);
+			BUF_GET, __FILE__, __LINE__, mtr, err);
 	}
 
 	DBUG_EXECUTE_IF(

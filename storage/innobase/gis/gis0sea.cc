@@ -269,9 +269,8 @@ rtr_pcur_getnext_from_path(
 
 		block = buf_page_get_gen(
 			page_id_t(index->table->space_id,
-			          next_rec.page_no), zip_size,
-			rw_latch, NULL, BUF_GET, __FILE__, __LINE__, mtr,
-			false, &err);
+				  next_rec.page_no), zip_size,
+			rw_latch, NULL, BUF_GET, __FILE__, __LINE__, mtr, &err);
 
 		if (block == NULL) {
 			continue;
@@ -1344,9 +1343,9 @@ search_again:
 	dberr_t err = DB_SUCCESS;
 
 	block = buf_page_get_gen(
-		page_id_t(index->table->space_id, page_no), zip_size,
-		RW_X_LATCH, NULL, BUF_GET, __FILE__, __LINE__, mtr,
-		false, &err);
+		page_id_t(index->table->space_id, page_no),
+		zip_size, RW_X_LATCH, NULL,
+		BUF_GET, __FILE__, __LINE__, mtr, &err);
 
 	ut_ad(block);
 
