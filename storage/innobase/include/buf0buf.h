@@ -499,9 +499,9 @@ does the merging of change buffer changes if it exists for the given page id.
 @param[in]	guess		guessed block or NULL
 @param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
 BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name
-@param[in]	line		line where called
-@param[in]	mtr		mini-transaction
+@param[in]	file		file name of caller
+@param[in]	line		line number of caller
+@param[in,out]	mtr		mini-transaction
 @param[out]	err		DB_SUCCESS or error code
 @return pointer to the block or NULL */
 buf_block_t*

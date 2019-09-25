@@ -453,11 +453,6 @@ bool find_eq_ref_candidate(TABLE *table, table_map sj_inner_tables);
 static SJ_MATERIALIZATION_INFO *
 at_sjmat_pos(const JOIN *join, table_map remaining_tables, const JOIN_TAB *tab,
              uint idx, bool *loose_scan);
-void best_access_path(JOIN *join, JOIN_TAB *s, 
-                             table_map remaining_tables, uint idx, 
-                             bool disable_jbuf, double record_count,
-                             POSITION *pos, POSITION *loose_scan_pos);
-
 static Item *create_subq_in_equalities(THD *thd, SJ_MATERIALIZATION_INFO *sjm, 
                                 Item_in_subselect *subq_pred);
 static bool remove_sj_conds(THD *thd, Item **tree);
@@ -2781,6 +2776,14 @@ void advance_sj_state(JOIN *join, table_map remaining_tables, uint idx,
 {
   POSITION *pos= join->positions + idx;
   const JOIN_TAB *new_join_tab= pos->table; 
+
+#ifdef HAVE_valgrind
+  new (&pos->firstmatch_picker) Firstmatch_picker;
+  new (&pos->loosescan_picker) LooseScan_picker;
+  new (&pos->sjmat_picker) Sj_materialization_picker;
+  new (&pos->dups_weedout_picker) Duplicate_weedout_picker;
+#endif
+
   if (join->emb_sjm_nest || //(1)
       !join->select_lex->have_merged_subqueries) //(2)
   {
@@ -3121,7 +3124,8 @@ bool Sj_materialization_picker::check_qep(JOIN *join,
     Json_writer_temp_disable trace_semijoin_mat_scan(thd);
     for (i= first_tab + mat_info->tables; i <= idx; i++)
     {
-      best_access_path(join, join->positions[i].table, rem_tables, i,
+      best_access_path(join, join->positions[i].table, rem_tables,
+                       join->positions, i,
                        disable_jbuf, prefix_rec_count, &curpos, &dummy);
       prefix_rec_count= COST_MULT(prefix_rec_count, curpos.records_read);
       prefix_cost= COST_ADD(prefix_cost, curpos.read_time);
@@ -3790,7 +3794,8 @@ void fix_semijoin_strategies_for_picked_join_order(JOIN *join)
           Json_writer_object trace_one_table(thd);
           trace_one_table.add_table_name(join->best_positions[i].table);
         }
-        best_access_path(join, join->best_positions[i].table, rem_tables, i, 
+        best_access_path(join, join->best_positions[i].table, rem_tables,
+                         join->best_positions, i,
                          FALSE, prefix_rec_count,
                          join->best_positions + i, &dummy);
         prefix_rec_count *= join->best_positions[i].records_read;
@@ -3830,8 +3835,9 @@ void fix_semijoin_strategies_for_picked_join_order(JOIN *join)
         }
         if (join->best_positions[idx].use_join_buffer)
         {
-           best_access_path(join, join->best_positions[idx].table, 
-                            rem_tables, idx, TRUE /* no jbuf */,
+           best_access_path(join, join->best_positions[idx].table,
+                            rem_tables, join->best_positions, idx,
+                            TRUE /* no jbuf */,
                             record_count, join->best_positions + idx, &dummy);
         }
         record_count *= join->best_positions[idx].records_read;
@@ -3869,7 +3875,8 @@ void fix_semijoin_strategies_for_picked_join_order(JOIN *join)
         if (join->best_positions[idx].use_join_buffer || (idx == first))
         {
            best_access_path(join, join->best_positions[idx].table,
-                            rem_tables, idx, TRUE /* no jbuf */,
+                            rem_tables, join->best_positions, idx,
+                            TRUE /* no jbuf */,
                             record_count, join->best_positions + idx,
                             &loose_scan_pos);
            if (idx==first)
@@ -3924,6 +3931,39 @@ void fix_semijoin_strategies_for_picked_join_order(JOIN *join)
     join->join_tab[first].sj_strategy= join->best_positions[first].sj_strategy;
     join->join_tab[first].n_sj_tables= join->best_positions[first].n_sj_tables;
   }
+}
+
+
+/*
+  Return the number of tables at the top-level of the JOIN
+
+  SYNOPSIS
+    get_number_of_tables_at_top_level()
+      join  The join with the picked join order
+
+  DESCRIPTION
+    The number of tables in the JOIN currently include all the inner tables of the
+    mergeable semi-joins. The function would make sure that we only count the semi-join
+    nest and not the inner tables of teh semi-join nest.
+*/
+
+uint get_number_of_tables_at_top_level(JOIN *join)
+{
+  uint j= 0, tables= 0;
+  while(j < join->table_count)
+  {
+    POSITION *cur_pos= &join->best_positions[j];
+    tables++;
+    if (cur_pos->sj_strategy == SJ_OPT_MATERIALIZE ||
+        cur_pos->sj_strategy == SJ_OPT_MATERIALIZE_SCAN)
+    {
+      SJ_MATERIALIZATION_INFO *sjm= cur_pos->table->emb_sj_nest->sj_mat_info;
+      j= j + sjm->tables;
+    }
+    else
+      j++;
+  }
+  return tables;
 }
 
 

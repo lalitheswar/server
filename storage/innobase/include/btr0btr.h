@@ -217,65 +217,53 @@ btr_height_get(
 	mtr_t*		mtr)	/*!< in/out: mini-transaction */
 	MY_ATTRIBUTE((warn_unused_result));
 
-/** Gets a buffer page and declares its latching order level.
-@param[in]	page_id	page id
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
+/** Get an index page and declare its latching order level.
+@param[in]	index	index tree
+@param[in]	page	page number
 @param[in]	mode	latch mode
 @param[in]	file	file name
 @param[in]	line	line where called
-@param[in]	index	index tree, may be NULL if it is not an insert buffer
-tree
 @param[in,out]	mtr	mini-transaction
 @return block */
-UNIV_INLINE
-buf_block_t*
-btr_block_get_func(
-	const page_id_t		page_id,
-	ulint			zip_size,
-	ulint			mode,
-	const char*		file,
-	unsigned		line,
-	dict_index_t*		index,
-	mtr_t*			mtr);
+inline buf_block_t* btr_block_get_func(const dict_index_t& index, ulint page,
+				       ulint mode,
+				       const char* file, unsigned line,
+				       mtr_t* mtr)
+{
+	dberr_t err;
 
-# ifdef UNIV_DEBUG
+	if (buf_block_t* block = buf_index_page_get(
+		    &index, page_id_t(index.table->space->id, page),
+		    index.table->space->zip_size(), mode, NULL, BUF_GET,
+		    file, line, mtr, &err)) {
+		ut_ad(err == DB_SUCCESS);
+		if (mode != RW_NO_LATCH) {
+			buf_block_dbg_add_level(block, index.is_ibuf()
+						? SYNC_IBUF_TREE_NODE
+						: SYNC_TREE_NODE);
+		}
+		return block;
+	} else {
+		ut_ad(err != DB_SUCCESS);
+
+		if (err == DB_DECRYPTION_FAILED) {
+			if (index.table) {
+				index.table->file_unreadable = true;
+			}
+		}
+
+		return NULL;
+	}
+}
+
 /** Gets a buffer page and declares its latching order level.
-@param page_id tablespace/page identifier
-@param zip_size ROW_FORMAT=COMPRESSED page size, or 0
+@param index index tree
+@param page page number
 @param mode latch mode
-@param index index tree, may be NULL if not the insert buffer tree
 @param mtr mini-transaction handle
 @return the block descriptor */
-#  define btr_block_get(page_id, zip_size, mode, index, mtr)	\
-	btr_block_get_func(page_id, zip_size, mode,		\
-		__FILE__, __LINE__, (dict_index_t*)index, mtr)
-# else /* UNIV_DEBUG */
-/** Gets a buffer page and declares its latching order level.
-@param page_id tablespace/page identifier
-@param zip_size ROW_FORMAT=COMPRESSED page size, or 0
-@param mode latch mode
-@param index index tree, may be NULL if not the insert buffer tree
-@param mtr mini-transaction handle
-@return the block descriptor */
-#  define btr_block_get(page_id, zip_size, mode, index, mtr)	\
-	btr_block_get_func(page_id, zip_size, mode, __FILE__, __LINE__, (dict_index_t*)index, mtr)
-# endif /* UNIV_DEBUG */
-/** Gets a buffer page and declares its latching order level.
-@param page_id tablespace/page identifier
-@param zip_size	compressed page size in bytes or 0 for uncompressed pages
-@param mode latch mode
-@param index index tree, may be NULL if not the insert buffer tree
-@param mtr mini-transaction handle
-@return the uncompressed page frame */
-UNIV_INLINE
-page_t*
-btr_page_get(
-	const page_id_t		page_id,
-	ulint			zip_size,
-	ulint			mode,
-	dict_index_t*		index,
-	mtr_t*			mtr)
-	MY_ATTRIBUTE((warn_unused_result));
+# define btr_block_get(index, page, mode, mtr)			\
+	btr_block_get_func(index, page, mode, __FILE__, __LINE__, mtr)
 /**************************************************************//**
 Gets the index id field of a page.
 @return index id */
@@ -718,7 +706,7 @@ buf_block_t*
 btr_root_block_get(
 /*===============*/
 	const dict_index_t*	index,	/*!< in: index tree */
-	ulint			mode,	/*!< in: either RW_S_LATCH
+	rw_lock_type_t		mode,	/*!< in: either RW_S_LATCH
 					or RW_X_LATCH */
 	mtr_t*			mtr);	/*!< in: mtr */
 
@@ -791,28 +779,11 @@ btr_validate_index(
 	MY_ATTRIBUTE((warn_unused_result));
 
 /** Remove a page from the level list of pages.
-@param[in]	space		space where removed
-@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
-@param[in,out]	page		page to remove
+@param[in]	block		page to remove
 @param[in]	index		index tree
 @param[in,out]	mtr		mini-transaction */
-void
-btr_level_list_remove_func(
-	ulint			space,
-	ulint			zip_size,
-	page_t*			page,
-	dict_index_t*		index,
-	mtr_t*			mtr);
-
-/*************************************************************//**
-Removes a page from the level list of pages.
-@param space	in: space where removed
-@param zip_size	in: compressed page size in bytes, or 0 for uncompressed
-@param page	in/out: page to remove
-@param index	in: index tree
-@param mtr	in/out: mini-transaction */
-# define btr_level_list_remove(space,zip_size,page,index,mtr)		\
-	btr_level_list_remove_func(space,zip_size,page,index,mtr)
+void btr_level_list_remove(const buf_block_t& block, const dict_index_t& index,
+			   mtr_t* mtr);
 
 /*************************************************************//**
 If page is the only on its level, this function moves its records to the

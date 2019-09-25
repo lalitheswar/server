@@ -7138,10 +7138,10 @@ static bool fill_alter_inplace_info(THD *thd, TABLE *table, bool varchar,
 
       --ha_alter_info->index_add_count;
       --ha_alter_info->index_drop_count;
-      memcpy(add_buffer + i, add_buffer + i + 1,
-             sizeof(add_buffer[0]) * (ha_alter_info->index_add_count - i));
-      memcpy(drop_buffer + j, drop_buffer + j + 1,
-             sizeof(drop_buffer[0]) * (ha_alter_info->index_drop_count - j));
+      memmove(add_buffer + i, add_buffer + i + 1,
+              sizeof(add_buffer[0]) * (ha_alter_info->index_add_count - i));
+      memmove(drop_buffer + j, drop_buffer + j + 1,
+              sizeof(drop_buffer[0]) * (ha_alter_info->index_drop_count - j));
       --i; // this index once again
       break;
     }
@@ -10180,7 +10180,7 @@ do_continue:;
   if (table->s->tmp_table != NO_TMP_TABLE)
   {
     /* in case of alter temp table send the tracker in OK packet */
-    SESSION_TRACKER_CHANGED(thd, SESSION_STATE_CHANGE_TRACKER, NULL);
+    thd->session_tracker.state_change.mark_as_changed(thd);
   }
 
   /*
@@ -11310,7 +11310,7 @@ bool Sql_cmd_create_table_like::execute(THD *thd)
   }
 #endif
 
-  if (select_lex->item_list.elements)		// With select
+  if (select_lex->item_list.elements || select_lex->tvc) // With select or TVC
   {
     select_result *result;
 
@@ -11481,7 +11481,7 @@ bool Sql_cmd_create_table_like::execute(THD *thd)
          ON then send session state notification in OK packet */
       if (create_info.options & HA_LEX_CREATE_TMP_TABLE)
       {
-        SESSION_TRACKER_CHANGED(thd, SESSION_STATE_CHANGE_TRACKER, NULL);
+        thd->session_tracker.state_change.mark_as_changed(thd);
       }
       my_ok(thd);
     }

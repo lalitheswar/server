@@ -162,11 +162,7 @@ btr_defragment_add_index(
 	*err = DB_SUCCESS;
 
 	mtr_start(&mtr);
-	// Load index rood page.
-	buf_block_t* block = btr_block_get(
-		page_id_t(index->table->space_id, index->page),
-		index->table->space->zip_size(),
-		RW_NO_LATCH, index, &mtr);
+	buf_block_t* block = btr_root_block_get(index, RW_NO_LATCH, &mtr);
 	page_t* page = NULL;
 
 	if (block) {
@@ -369,7 +365,7 @@ btr_defragment_calc_n_recs_for_size(
 Merge as many records from the from_block to the to_block. Delete
 the from_block if all records are successfully merged to to_block.
 @return the to_block to target for next merge operation. */
-UNIV_INTERN
+static
 buf_block_t*
 btr_defragment_merge_pages(
 	dict_index_t*	index,		/*!< in: index tree */
@@ -487,9 +483,7 @@ btr_defragment_merge_pages(
 		lock_update_merge_left(to_block, orig_pred,
 				       from_block);
 		btr_search_drop_page_hash_index(from_block);
-		btr_level_list_remove(
-			index->table->space_id,
-			zip_size, from_page, index, mtr);
+		btr_level_list_remove(*from_block, *index, mtr);
 		btr_page_get_father(index, from_block, mtr, &parent);
 		btr_cur_node_ptr_delete(&parent, mtr);
 		/* btr_blob_dbg_remove(from_page, index,
@@ -591,9 +585,7 @@ btr_defragment_n_pages(
 			break;
 		}
 
-		blocks[i] = btr_block_get(page_id_t(index->table->space_id,
-						    page_no), zip_size,
-					  RW_X_LATCH, index, mtr);
+		blocks[i] = btr_block_get(*index, page_no, RW_X_LATCH, mtr);
 	}
 
 	if (n_pages == 1) {

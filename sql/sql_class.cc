@@ -1750,6 +1750,7 @@ THD::~THD()
   /* trick to make happy memory accounting system */
 #ifndef EMBEDDED_LIBRARY
   session_tracker.sysvars.deinit();
+  session_tracker.user_variables.deinit();
 #endif //EMBEDDED_LIBRARY
 
   if (status_var.local_memory_used != 0)
@@ -7216,11 +7217,10 @@ void THD::set_last_commit_gtid(rpl_gtid &gtid)
 #endif
   m_last_commit_gtid= gtid;
 #ifndef EMBEDDED_LIBRARY
-  if (changed_gtid && session_tracker.sysvars.is_enabled())
+  if (changed_gtid)
   {
     DBUG_ASSERT(current_thd == this);
-    session_tracker.sysvars.
-      mark_as_changed(this, (LEX_CSTRING*)Sys_last_gtid_ptr);
+    session_tracker.sysvars.mark_as_changed(this, Sys_last_gtid_ptr);
   }
 #endif
 }
