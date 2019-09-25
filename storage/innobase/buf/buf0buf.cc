@@ -4973,7 +4973,13 @@ evict_from_pool:
 	}
 
 	if (allow_ibuf_merge) {
-		if (page_is_leaf(fix_block->frame)) {
+		const uint16_t page_type = mach_read_from_2(fix_block->frame
+							    + FIL_PAGE_TYPE);
+		ut_ad(page_type == FIL_PAGE_INDEX
+		      || page_type == FIL_PAGE_RTREE);
+		ut_ad(page_is_leaf(fix_block->frame));
+
+		if (page_type == FIL_PAGE_INDEX) {
 			rw_lock_x_lock(&fix_block->lock);
 
 			if (fix_block->page.is_ibuf_exist()) {
