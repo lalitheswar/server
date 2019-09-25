@@ -91,124 +91,6 @@ buf_read_page_handle_error(
 	buf_pool_mutex_exit(buf_pool);
 }
 
-/** Merge the change buffer changes for the buffered pages.
-@param[in]	page_id		page id to be merged
-@param[in]	zip_size	0, or ROW_FORMAT=COMPRESSED page size */
-static void buf_merge_buffered_page(const page_id_t page_id)
-{
-	buf_pool_t*	buf_pool = buf_pool_get(page_id);
-
-	buf_pool_mutex_enter(buf_pool);
-
-	rw_lock_t* hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
-
-	rw_lock_x_lock(hash_lock);
-
-	buf_page_t* bpage = buf_page_hash_get_low(buf_pool, page_id);
-	bpage->fix();
-	rw_lock_x_unlock(hash_lock);
-	buf_pool_mutex_exit(buf_pool);
-
-	if (buf_page_get_state(bpage) == BUF_BLOCK_ZIP_PAGE) {
-		zip_err_t	zip_err;
-		buf_block_t*	block = buf_block_for_zip_page(
-			buf_pool, bpage, BUF_GET,
-			__FILE__, __LINE__, NULL, &zip_err, true);
-
-		ut_ad(block != NULL);
-		ut_ad(zip_err == SUCCESS);
-
-		if (block->page.buf_fix_count > 0) { // FIXME: why this?
-			block->unfix();
-		}
-
-		return;
-	}
-
-	ut_ad(buf_page_get_state(bpage) == BUF_BLOCK_FILE_PAGE);
-
-	buf_block_t* block = reinterpret_cast<buf_block_t*>(bpage);
-
-	rw_lock_x_lock(&block->lock);
-
-	if (block->page.is_ibuf_exist()) {
-		ibuf_merge_or_delete_for_page(
-			block, page_id, block->zip_size(), true);
-		block->page.set_ibuf_exist(false);
-	}
-
-	rw_lock_x_unlock(&block->lock);
-
-	block->unfix();
-}
-
-/** Function for change buffer merges to happen for the pages. It is a
-replica of buf_page_read_low. REMOVE it once everything is in right way. */
-static
-void buf_read_and_merge_ibuf_page(
-	dberr_t*	err,
-	bool		sync,
-	ulint		type,
-	ulint		mode,
-	const page_id_t	page_id,
-	ulint		zip_size)
-{
-	*err = DB_SUCCESS;
-	buf_page_t*	bpage = buf_page_init_for_read(
-			err, mode, page_id, zip_size, true);
-
-	if (bpage == NULL) {
-		return buf_merge_buffered_page(page_id);
-	}
-
-	DBUG_LOG("ib_buf",
-		 "read page " << page_id << " zip_size=" << zip_size
-		 << ',' << (sync ? "sync" : "async"));
-
-	ut_ad(buf_page_in_file(bpage));
-
-	if (sync) {
-		thd_wait_begin(NULL, THD_WAIT_DISKIO);
-	}
-
-	void*	dst;
-
-	if (zip_size) {
-		dst = bpage->zip.data;
-	} else {
-		ut_a(buf_page_get_state(bpage) == BUF_BLOCK_FILE_PAGE);
-
-		dst = ((buf_block_t*) bpage)->frame;
-	}
-
-	IORequest	request(type | IORequest::READ);
-
-	*err = fil_io(
-		request, sync, page_id, zip_size, 0,
-		zip_size ? zip_size : srv_page_size,
-		dst, bpage, true);
-
-	if (sync) {
-		thd_wait_end(NULL);
-	}
-
-	if (UNIV_UNLIKELY(*err != DB_SUCCESS)) {
-		if (IORequest::ignore_missing(type)
-		    || *err == DB_TABLESPACE_DELETED) {
-			buf_read_page_handle_error(bpage);
-			return;
-		}
-
-		ut_error;
-	}
-
-	if (sync) {
-		/* The i/o is already completed when we arrive from
-		fil_read */
-		*err = buf_page_io_complete(bpage, false, false, true);
-	}
-}
-
 /** Low-level function which reads a page asynchronously from a file to the
 buffer buf_pool if it is not already there, in which case does nothing.
 Sets the io_fix flag and sets an exclusive lock on the buffer frame. The
@@ -238,8 +120,7 @@ buf_read_page_low(
 	const page_id_t		page_id,
 	ulint			zip_size,
 	bool			unzip,
-	bool			ignore_missing_space = false,
-	bool			allow_ibuf_merge=false)
+	bool			ignore_missing_space = false)
 {
 	buf_page_t*	bpage;
 
@@ -319,7 +200,7 @@ buf_read_page_low(
 	if (sync) {
 		/* The i/o is already completed when we arrive from
 		fil_read */
-		*err = buf_page_io_complete(bpage, allow_ibuf_merge);
+		*err = buf_page_io_complete(bpage);
 
 		if (*err != DB_SUCCESS) {
 			return(0);
@@ -509,15 +390,14 @@ read_ahead:
 buffer buf_pool if it is not already there. Sets the io_fix flag and sets
 an exclusive lock on the buffer frame. The flag is cleared and the x-lock
 released by the i/o-handler thread.
-@param[in]	page_id			page id
-@param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	allow_ibuf_merge	Allow change buffer merge to happen
+@param[in]	page_id		page id
+@param[in]	zip_size	ROW_FORMAT=COMPRESSED page size, or 0
 @retval DB_SUCCESS if the page was read and is not corrupted,
 @retval DB_PAGE_CORRUPTED if page based on checksum check is corrupted,
 @retval DB_DECRYPTION_FAILED if page post encryption checksum matches but
 after decryption normal page checksum does not match.
 @retval DB_TABLESPACE_DELETED if tablespace .ibd file is missing */
-dberr_t buf_read_page(const page_id_t page_id, ulint zip_size, bool allow_ibuf_merge)
+dberr_t buf_read_page(const page_id_t page_id, ulint zip_size)
 {
 	ulint		count;
 	dberr_t		err = DB_SUCCESS;
@@ -530,7 +410,7 @@ dberr_t buf_read_page(const page_id_t page_id, ulint zip_size, bool allow_ibuf_m
 
 	count = buf_read_page_low(
 		&err, true,
-		0, BUF_READ_ANY_PAGE, page_id, zip_size, false, allow_ibuf_merge);
+		0, BUF_READ_ANY_PAGE, page_id, zip_size, false);
 
 	srv_stats.buf_pool_reads.add(count);
 
@@ -872,87 +752,6 @@ buf_read_ahead_linear(const page_id_t page_id, ulint zip_size, bool ibuf)
 
 	buf_pool->stat.n_ra_pages_read += count;
 	return(count);
-}
-
-/********************************************************************//**
-Issues read requests for pages which the ibuf module wants to read in, in
-order to contract the insert buffer tree. Technically, this function is like
-a read-ahead function. */
-void
-buf_read_ibuf_merge_pages(
-/*======================*/
-	bool		sync,		/*!< in: true if the caller
-					wants this function to wait
-					for the highest address page
-					to get read in, before this
-					function returns */
-	const ulint*	space_ids,	/*!< in: array of space ids */
-	const ulint*	page_nos,	/*!< in: array of page numbers
-					to read, with the highest page
-					number the last in the
-					array */
-	ulint		n_stored)	/*!< in: number of elements
-					in the arrays */
-{
-#ifdef UNIV_IBUF_DEBUG
-	ut_a(n_stored < srv_page_size);
-#endif
-
-	for (ulint i = 0; i < n_stored; i++) {
-		fil_space_t* s = fil_space_acquire_for_io(space_ids[i]);
-		if (!s) {
-tablespace_deleted:
-			/* The tablespace was not found: remove all
-			entries for it */
-			ibuf_delete_for_discarded_space(space_ids[i]);
-			while (i + 1 < n_stored
-			       && space_ids[i + 1] == space_ids[i]) {
-				i++;
-			}
-			continue;
-		}
-
-		const ulint zip_size = s->zip_size();
-		s->release_for_io();
-
-		const page_id_t	page_id(space_ids[i], page_nos[i]);
-
-		buf_pool_t*	buf_pool = buf_pool_get(page_id);
-
-		while (buf_pool->n_pend_reads
-		       > buf_pool->curr_size / BUF_READ_AHEAD_PEND_LIMIT) {
-			os_thread_sleep(500000);
-		}
-
-		dberr_t	err;
-
-		buf_read_and_merge_ibuf_page(
-			&err, sync && (i + 1 == n_stored),
-			0, BUF_READ_ANY_PAGE, page_id, zip_size);
-
-		switch(err) {
-		case DB_SUCCESS:
-		case DB_ERROR:
-			break;
-		case DB_TABLESPACE_DELETED:
-			goto tablespace_deleted;
-		case DB_PAGE_CORRUPTED:
-		case DB_DECRYPTION_FAILED:
-			ib::error() << "Failed to read or decrypt " << page_id
-				<< " for change buffer merge";
-			break;
-		default:
-			ut_error;
-		}
-	}
-
-	os_aio_simulated_wake_handler_threads();
-
-	if (n_stored) {
-		DBUG_PRINT("ib_buf",
-			   ("ibuf merge read-ahead %u pages, space %u",
-			    unsigned(n_stored), unsigned(space_ids[0])));
-	}
 }
 
 /** Issues read requests for pages which recovery wants to read in.

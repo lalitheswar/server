@@ -19233,12 +19233,6 @@ static MYSQL_SYSVAR_UINT(change_buffering_debug, ibuf_debug,
   PLUGIN_VAR_RQCMDARG,
   "Debug flags for InnoDB change buffering (0=none, 1=try to buffer)",
   NULL, NULL, 0, 0, 1, 0);
-
-static MYSQL_SYSVAR_BOOL(disable_background_merge,
-  srv_ibuf_disable_background_merge,
-  PLUGIN_VAR_NOCMDARG | PLUGIN_VAR_RQCMDARG,
-  "Disable change buffering merges by the master thread",
-  NULL, NULL, FALSE);
 #endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 
 static MYSQL_SYSVAR_ULONG(buf_dump_status_frequency, srv_buf_dump_status_frequency,
@@ -19700,7 +19694,6 @@ static struct st_mysql_sys_var* innobase_system_variables[]= {
   MYSQL_SYSVAR(change_buffer_max_size),
 #if defined UNIV_DEBUG || defined UNIV_IBUF_DEBUG
   MYSQL_SYSVAR(change_buffering_debug),
-  MYSQL_SYSVAR(disable_background_merge),
 #endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
 #ifdef WITH_INNODB_DISALLOW_WRITES
   MYSQL_SYSVAR(disallow_writes),

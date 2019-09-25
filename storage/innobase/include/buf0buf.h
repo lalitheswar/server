@@ -439,29 +439,6 @@ the same set of mutexes or latches.
 @return pointer to the block */
 buf_page_t* buf_page_get_zip(const page_id_t page_id, ulint zip_size);
 
-/** Get the uncompressed block for a ROW_FORMAT=COMPRESSED page.
-@param[in]	buf_pool	buffer pool instance
-@param[in]	bpage		block which was read from file
-@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name
-@param[in]	line		line where called
-@param[out]	err		DB_SUCCESS or error code
-@param[out]	zip_err		Compressed error
-@param[in]	ibuf_merge	whether to merge the change buffer to the page
-@return pointer to the block
-@return	NULL if the page cannot be uncompressed at the moment */
-buf_block_t*
-buf_block_for_zip_page(
-	buf_pool_t*	buf_pool,
-	buf_page_t*	bpage,
-	ulint		mode,
-	const char*	file,
-	unsigned	line,
-	dberr_t*	err,
-	zip_err_t*	zip_err,
-	bool		ibuf_merge);
-
 /** This is the general function used to get access to a database page.
 @param[in]	page_id			page id
 @param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
@@ -1202,7 +1179,6 @@ buf_page_init_for_read(
 @param[in,out]	bpage	page to complete
 @param[in]	dblwr	whether the doublewrite buffer was used (on write)
 @param[in]	evict	whether or not to evict the page from LRU list
-@param[in]	merge_ibuf	called from change buffer merge function
 @return whether the operation succeeded
 @retval	DB_SUCCESS		always when writing, or if a read page was OK
 @retval	DB_PAGE_CORRUPTED	if the checksum fails on a page read
@@ -1214,8 +1190,7 @@ dberr_t
 buf_page_io_complete(
 	buf_page_t*	bpage,
 	bool		dblwr = false,
-	bool		evict = false,
-	bool		ibuf_merge = false)
+	bool		evict = false)
 	MY_ATTRIBUTE((nonnull));
 
 /********************************************************************//**

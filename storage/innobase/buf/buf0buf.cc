@@ -4202,14 +4202,6 @@ buf_debug_execute_is_force_flush()
 /*==============================*/
 {
 	DBUG_EXECUTE_IF("ib_buf_force_flush", return(true); );
-
-	/* This is used during queisce testing, we want to ensure maximum
-	buffering by the change buffer. */
-
-	if (srv_ibuf_disable_background_merge) {
-		return(true);
-	}
-
 	return(false);
 }
 #endif /* UNIV_DEBUG || UNIV_IBUF_DEBUG */
@@ -4264,9 +4256,9 @@ BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
 @param[in]	line		line where called
 @param[out]	err		DB_SUCCESS or error code
 @param[out]	zip_err		Compressed error
-@param[in]	ibuf_merge	whether to merge the change buffer to the page
 @return pointer to the block
 @return	NULL if the page cannot be uncompressed at the moment */
+static
 buf_block_t*
 buf_block_for_zip_page(
 	buf_pool_t*	buf_pool,
@@ -4275,8 +4267,7 @@ buf_block_for_zip_page(
 	const char*	file,
 	unsigned	line,
 	dberr_t*	err,
-	zip_err_t*	zip_err,
-	bool		ibuf_merge)
+	zip_err_t*	zip_err)
 {
 	buf_block_t*	block;
 
@@ -4420,14 +4411,9 @@ buf_block_for_zip_page(
 		return NULL;
 	}
 
-	if (!access_time && !recv_no_ibuf_operations) {
-		if (ibuf_merge) {
-			ibuf_merge_or_delete_for_page(
-				block, block->page.id, block->zip_size(),
-				true);
-		} else if (ibuf_page_exists(block->page)) {
-			block->page.set_ibuf_exist(true);
-		}
+	if (!access_time && !recv_no_ibuf_operations
+	    && ibuf_page_exists(block->page)) {
+		block->page.set_ibuf_exist(true);
 	}
 
 	buf_pool_mutex_enter(buf_pool);
@@ -4489,6 +4475,10 @@ buf_page_get_gen(
 	      || (rw_latch == RW_X_LATCH)
 	      || (rw_latch == RW_SX_LATCH)
 	      || (rw_latch == RW_NO_LATCH));
+	ut_ad(!allow_ibuf_merge
+	      || mode == BUF_GET
+	      || mode == BUF_GET_IF_IN_POOL
+	      || mode == BUF_GET_IF_IN_POOL_OR_WATCH);
 
 	if (err) {
 		*err = DB_SUCCESS;
@@ -4632,8 +4622,7 @@ loop:
 		corrupted, or if an encrypted page with a valid
 		checksum cannot be decypted. */
 
-		dberr_t local_err = buf_read_page(
-				page_id, zip_size, allow_ibuf_merge);
+		dberr_t local_err = buf_read_page(page_id, zip_size);
 
 		if (local_err == DB_SUCCESS) {
 			buf_read_ahead_random(page_id, zip_size,
@@ -4791,7 +4780,7 @@ evict_from_pool:
 
 		block = buf_block_for_zip_page(
 			buf_pool, &fix_block->page, mode, file, line,
-			err, &zip_err, allow_ibuf_merge);
+			err, &zip_err);
 
 		if (block) {
 			fix_block = block;
@@ -4972,32 +4961,29 @@ evict_from_pool:
 		return NULL;
 	}
 
-	if (allow_ibuf_merge) {
-		const uint16_t page_type = mach_read_from_2(fix_block->frame
-							    + FIL_PAGE_TYPE);
-		ut_ad(page_type == FIL_PAGE_INDEX
-		      || page_type == FIL_PAGE_RTREE);
-		ut_ad(page_is_leaf(fix_block->frame));
+	if (allow_ibuf_merge
+	    && mach_read_from_2(fix_block->frame + FIL_PAGE_TYPE)
+	    == FIL_PAGE_INDEX
+	    && page_is_leaf(fix_block->frame)) {
+		rw_lock_x_lock_inline(&fix_block->lock, 0, file, line);
 
-		if (page_type == FIL_PAGE_INDEX) {
-			rw_lock_x_lock(&fix_block->lock);
-
-			if (fix_block->page.is_ibuf_exist()) {
-				/* Merge the page from change buffer. */
-				ibuf_merge_or_delete_for_page(
-					fix_block, page_id, zip_size, true);
-				fix_block->page.set_ibuf_exist(false);
-			}
-
-			rw_lock_x_unlock(&fix_block->lock);
+		if (fix_block->page.is_ibuf_exist()) {
+			/* Merge the page from change buffer. */
+			ibuf_merge_or_delete_for_page(
+				fix_block, page_id, zip_size, true);
+			fix_block->page.set_ibuf_exist(false);
 		}
 
-		// FIXME: move this earlier if possible (avoid unlock/lock)
+		if (rw_latch == RW_X_LATCH) {
+			mtr->memo_push(fix_block, MTR_MEMO_PAGE_X_FIX);
+		} else {
+			rw_lock_x_unlock(&fix_block->lock);
+			goto get_latch;
+		}
+	} else {
+get_latch:
 		mtr->lock_page(fix_block, rw_latch, file, line);
-		return fix_block;
 	}
-
-	mtr->lock_page(fix_block, rw_latch, file, line);
 
 	if (mode != BUF_PEEK_IF_IN_POOL && !access_time) {
 		/* In the case of a first access, try to apply linear
@@ -6088,7 +6074,6 @@ static dberr_t buf_page_check_corrupt(buf_page_t* bpage, fil_space_t* space)
 @param[in,out]	bpage		page to complete
 @param[in]	dblwr		whether the doublewrite buffer was used (on write)
 @param[in]	evict		whether or not to evict the page from LRU list
-@param[in]	merge_ibuf	called from change buffer merge function
 @return whether the operation succeeded
 @retval	DB_SUCCESS		always when writing, or if a read page was OK
 @retval	DB_TABLESPACE_DELETED	if the tablespace does not exist
@@ -6098,7 +6083,7 @@ static dberr_t buf_page_check_corrupt(buf_page_t* bpage, fil_space_t* space)
 				not match */
 UNIV_INTERN
 dberr_t
-buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict, bool ibuf_merge)
+buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict)
 {
 	enum buf_io_fix	io_type;
 	buf_pool_t*	buf_pool = buf_pool_from_bpage(bpage);
@@ -6274,25 +6259,7 @@ database_corrupted:
 			|| !is_predefined_tablespace(bpage->id.space()))
 		    && fil_page_get_type(frame) == FIL_PAGE_INDEX
 		    && page_is_leaf(frame)) {
-
-			if (bpage->encrypted) {
-				ib::warn()
-					<< "Table in tablespace "
-					<< bpage->id.space()
-					<< " encrypted. However key "
-					"management plugin or used "
-					<< "key_version " << key_version
-					<< " is not found or"
-					" used encryption algorithm or method does not match."
-					" Can't continue opening the table.";
-			} else if (ibuf_merge) {
-				ibuf_merge_or_delete_for_page(
-					(buf_block_t*) bpage, bpage->id,
-					bpage->zip_size(), true);
-			} else {
-				bpage->set_ibuf_exist(
-					ibuf_page_exists(*bpage));
-			}
+			bpage->set_ibuf_exist(ibuf_page_exists(*bpage));
 		}
 
 		space->release_for_io();
