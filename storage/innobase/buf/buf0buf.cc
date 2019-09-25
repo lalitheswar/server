@@ -4982,7 +4982,28 @@ evict_from_pool:
 		}
 	} else {
 get_latch:
-		mtr->lock_page(fix_block, rw_latch, file, line);
+		mtr_memo_type_t fix_type;
+
+		switch (rw_latch) {
+		case RW_NO_LATCH:
+			fix_type = MTR_MEMO_BUF_FIX;
+			break;
+		case RW_S_LATCH:
+			rw_lock_s_lock_inline(&fix_block->lock, 0, file, line);
+			fix_type = MTR_MEMO_PAGE_S_FIX;
+			break;
+		case RW_SX_LATCH:
+			rw_lock_sx_lock_inline(&fix_block->lock, 0, file, line);
+			fix_type = MTR_MEMO_PAGE_SX_FIX;
+			break;
+		default:
+			ut_ad(rw_latch == RW_X_LATCH);
+			rw_lock_x_lock_inline(&fix_block->lock, 0, file, line);
+			fix_type = MTR_MEMO_PAGE_X_FIX;
+			break;
+		}
+
+		mtr->memo_push(block, fix_type);
 	}
 
 	if (mode != BUF_PEEK_IF_IN_POOL && !access_time) {
