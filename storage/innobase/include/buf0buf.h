@@ -489,25 +489,6 @@ buf_page_get_gen(
 	dberr_t*		err = NULL,
 	bool			allow_ibuf_merge = false);
 
-/** This is the general function used to get access to database page and
-does the merging of change buffer changes if it exists for the given page id.
-@param[in]	index		index of the page to be fetched
-@param[in]	id		page_id
-@param[in]	zs		ROW_FORMAT=COMPRESSED page size, or 0
-@param[in]	rw		RW_S_LATCH, RW_X_LATCH, RW_NO_LATCH
-@param[in]	guess		guessed block or NULL
-@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name of caller
-@param[in]	line		line number of caller
-@param[in,out]	mtr		mini-transaction
-@param[out]	err		DB_SUCCESS or error code
-@return pointer to the block
-@retval NULL if the block cannot be retrieved */
-#define buf_index_page_get(index, id, zs, rw, guess, mode, f, l, mtr, err) \
-	buf_page_get_gen(id, zs, rw, guess, mode, f, l, mtr, err,	\
-			 !(index).is_clust())
-
 /** Initialize a page in the buffer pool. The page is usually not read
 from a file even if it cannot be found in the buffer buf_pool. This is one
 of the functions which perform to a block a state transition NOT_USED =>

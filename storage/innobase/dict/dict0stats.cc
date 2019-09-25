@@ -1493,6 +1493,7 @@ dict_stats_analyze_index_below_cur(
 	rec_offs_set_n_alloc(offsets2, size);
 
 	rec = btr_cur_get_rec(cur);
+	page = page_align(rec);
 	ut_ad(!page_rec_is_leaf(rec));
 
 	offsets_rec = rec_get_offsets(rec, index, offsets1, false,
@@ -1514,9 +1515,11 @@ dict_stats_analyze_index_below_cur(
 
 		dberr_t err = DB_SUCCESS;
 
-		block = buf_index_page_get(*index, page_id, zip_size,
-					   RW_S_LATCH, NULL, BUF_GET,
-					   __FILE__, __LINE__, &mtr, &err);
+		block = buf_page_get_gen(page_id, zip_size,
+					 RW_S_LATCH, NULL, BUF_GET,
+					 __FILE__, __LINE__, &mtr, &err,
+					 !index->is_clust()
+					 && 1 == btr_page_get_level(page));
 
 		page = buf_block_get_frame(block);
 
