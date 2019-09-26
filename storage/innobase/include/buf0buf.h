@@ -1660,11 +1660,6 @@ public:
   {
     return zip.ssize ? (UNIV_ZIP_SIZE_MIN >> 1) << zip.ssize : 0;
   }
-
-  /** Getter & Setter for ibuf_exists variable. */
-  bool is_ibuf_exist() const { return ibuf_exist; }
-
-  void set_ibuf_exist(bool ibuf_value) { ibuf_exist = ibuf_value; }
 };
 
 /** The buffer control block structure */

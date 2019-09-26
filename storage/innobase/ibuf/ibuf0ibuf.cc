@@ -4222,25 +4222,18 @@ bool ibuf_page_exists(const buf_page_t& bpage)
 		return false;
 	}
 
-	if (fil_space_t* space = fil_space_acquire_silent(bpage.id.space())) {
-		mtr_t mtr;
-		bool bitmap_bits = false;
+	mtr_t mtr;
+	bool bitmap_bits = false;
 
-		ibuf_mtr_start(&mtr);
-		if (const page_t* bitmap_page = ibuf_bitmap_get_map_page(
-			    bpage.id, bpage.zip_size(), &mtr)) {
-			bitmap_bits = ibuf_bitmap_page_get_bits(
-				bitmap_page, bpage.id, bpage.zip_size(),
-				IBUF_BITMAP_BUFFERED, &mtr) != 0;
-		}
-		ibuf_mtr_commit(&mtr);
-
-		space->release();
-
-		return bitmap_bits;
+	ibuf_mtr_start(&mtr);
+	if (const page_t* bitmap_page = ibuf_bitmap_get_map_page(
+		    bpage.id, bpage.zip_size(), &mtr)) {
+		bitmap_bits = ibuf_bitmap_page_get_bits(
+			bitmap_page, bpage.id, bpage.zip_size(),
+			IBUF_BITMAP_BUFFERED, &mtr) != 0;
 	}
-
-	return false;
+	ibuf_mtr_commit(&mtr);
+	return bitmap_bits;
 }
 
 /** When an index page is read from a disk to the buffer pool, this function

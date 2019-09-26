@@ -254,8 +254,8 @@ public:
 	{
 		ut_ad(mutex_own(&recv_sys.mutex));
 		ut_ad(recv_no_ibuf_operations);
-		for (map::iterator i= inits.begin(); i != inits.end(); i++) {
-			i->second.created = false;
+		for (auto &i : inits) {
+			i.second.created = false;
 		}
 	}
 
@@ -274,18 +274,17 @@ public:
 		ut_ad(!recv_no_ibuf_operations);
 		mtr.start();
 
-		for (map::const_iterator i= inits.begin(); i != inits.end();
-		     i++) {
-			if (!i->second.created) {
+		for (const auto& i : inits) {
+			if (!i.second.created) {
 				continue;
 			}
 			if (buf_block_t* block = buf_page_get_gen(
-				    i->first, 0, RW_X_LATCH, NULL,
+				    i.first, 0, RW_X_LATCH, NULL,
 				    BUF_GET_IF_IN_POOL, __FILE__, __LINE__,
-				    &mtr, NULL)) {
+				    &mtr)) {
 				mutex_exit(&recv_sys.mutex);
-				block->page.set_ibuf_exist(
-					ibuf_page_exists(block->page));
+				block->page.ibuf_exist = ibuf_page_exists(
+					block->page);
 				mtr.commit();
 				mtr.start();
 				mutex_enter(&recv_sys.mutex);

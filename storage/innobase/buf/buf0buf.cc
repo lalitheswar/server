@@ -4413,7 +4413,7 @@ buf_block_for_zip_page(
 
 	if (!access_time && !recv_no_ibuf_operations
 	    && ibuf_page_exists(block->page)) {
-		block->page.set_ibuf_exist(true);
+		block->page.ibuf_exist = true;
 	}
 
 	buf_pool_mutex_enter(buf_pool);
@@ -4967,11 +4967,10 @@ evict_from_pool:
 	    && page_is_leaf(fix_block->frame)) {
 		rw_lock_x_lock_inline(&fix_block->lock, 0, file, line);
 
-		if (fix_block->page.is_ibuf_exist()) {
-			/* Merge the page from change buffer. */
-			ibuf_merge_or_delete_for_page(
-				fix_block, page_id, zip_size, true);
-			fix_block->page.set_ibuf_exist(false);
+		if (fix_block->page.ibuf_exist) {
+			fix_block->page.ibuf_exist = false;
+			ibuf_merge_or_delete_for_page(fix_block, page_id,
+						      zip_size, true);
 		}
 
 		if (rw_latch == RW_X_LATCH) {
@@ -6277,8 +6276,9 @@ database_corrupted:
 		    && (bpage->id.space() == 0
 			|| !is_predefined_tablespace(bpage->id.space()))
 		    && fil_page_get_type(frame) == FIL_PAGE_INDEX
-		    && page_is_leaf(frame)) {
-			bpage->set_ibuf_exist(ibuf_page_exists(*bpage));
+		    && page_is_leaf(frame)
+		    && ibuf_page_exists(*bpage)) {
+			bpage->ibuf_exist = true;
 		}
 
 		space->release_for_io();
