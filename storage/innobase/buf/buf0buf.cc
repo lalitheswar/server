@@ -6126,7 +6126,6 @@ buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict)
 	if (io_type == BUF_IO_READ) {
 		ulint	read_page_no = 0;
 		ulint	read_space_id = 0;
-		uint	key_version = 0;
 		byte*	frame = bpage->zip.data
 			? bpage->zip.data
 			: reinterpret_cast<buf_block_t*>(bpage)->frame;
@@ -6166,7 +6165,6 @@ buf_page_io_complete(buf_page_t* bpage, bool dblwr, bool evict)
 		read_page_no = mach_read_from_4(frame + FIL_PAGE_OFFSET);
 		read_space_id = mach_read_from_4(
 			frame + FIL_PAGE_ARCH_LOG_NO_OR_SPACE_ID);
-		key_version = buf_page_get_key_version(frame, space->flags);
 
 		if (bpage->id.space() == TRX_SYS_SPACE
 		    && buf_dblwr_page_inside(bpage->id.page_no())) {
