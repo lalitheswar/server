@@ -1188,7 +1188,6 @@ btr_cur_search_to_nth_level_func(
 	ulint		up_bytes;
 	ulint		low_match;
 	ulint		low_bytes;
-	ulint		savepoint;
 	ulint		rw_latch;
 	page_cur_mode_t	page_mode;
 	page_cur_mode_t	search_mode = PAGE_CUR_UNSUPP;
@@ -1200,7 +1199,6 @@ btr_cur_search_to_nth_level_func(
 	ulint		root_height = 0; /* remove warning */
 	dberr_t		err = DB_SUCCESS;
 
-	ulint		upper_rw_latch, root_leaf_rw_latch;
 	btr_intention_t	lock_intention;
 	bool		modify_external;
 	buf_block_t*	tree_blocks[BTR_MAX_LEVELS];
@@ -1390,7 +1388,9 @@ btr_cur_search_to_nth_level_func(
 	/* Store the position of the tree latch we push to mtr so that we
 	know how to release it when we have latched leaf node(s) */
 
-	savepoint = mtr_set_savepoint(mtr);
+	ulint savepoint = mtr_set_savepoint(mtr);
+
+	rw_lock_type_t upper_rw_latch;
 
 	switch (latch_mode) {
 	case BTR_MODIFY_TREE:
@@ -1451,7 +1451,8 @@ btr_cur_search_to_nth_level_func(
 			upper_rw_latch = RW_NO_LATCH;
 		}
 	}
-	root_leaf_rw_latch = btr_cur_latch_for_root_leaf(latch_mode);
+	const rw_lock_type_t root_leaf_rw_latch = btr_cur_latch_for_root_leaf(
+		latch_mode);
 
 	page_cursor = btr_cur_get_page_cur(cursor);
 
@@ -2476,8 +2477,6 @@ btr_cur_open_at_index_side_func(
 	ulint		root_height = 0; /* remove warning */
 	rec_t*		node_ptr;
 	ulint		estimate;
-	ulint		savepoint;
-	ulint		upper_rw_latch, root_leaf_rw_latch;
 	btr_intention_t	lock_intention;
 	buf_block_t*	tree_blocks[BTR_MAX_LEVELS];
 	ulint		tree_savepoints[BTR_MAX_LEVELS];
@@ -2514,7 +2513,9 @@ btr_cur_open_at_index_side_func(
 	/* Store the position of the tree latch we push to mtr so that we
 	know how to release it when we have latched the leaf node */
 
-	savepoint = mtr_set_savepoint(mtr);
+	ulint savepoint = mtr_set_savepoint(mtr);
+
+	rw_lock_type_t upper_rw_latch;
 
 	switch (latch_mode) {
 	case BTR_CONT_MODIFY_TREE:
@@ -2553,7 +2554,9 @@ btr_cur_open_at_index_side_func(
 			upper_rw_latch = RW_NO_LATCH;
 		}
 	}
-	root_leaf_rw_latch = btr_cur_latch_for_root_leaf(latch_mode);
+
+	const rw_lock_type_t root_leaf_rw_latch = btr_cur_latch_for_root_leaf(
+		latch_mode);
 
 	page_cursor = btr_cur_get_page_cur(cursor);
 	cursor->index = index;
