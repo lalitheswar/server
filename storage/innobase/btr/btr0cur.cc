@@ -2828,8 +2828,6 @@ btr_cur_open_at_rnd_pos_func(
 	ulint		node_ptr_max_size = srv_page_size / 2;
 	ulint		height;
 	rec_t*		node_ptr;
-	ulint		savepoint;
-	ulint		upper_rw_latch, root_leaf_rw_latch;
 	btr_intention_t	lock_intention;
 	buf_block_t*	tree_blocks[BTR_MAX_LEVELS];
 	ulint		tree_savepoints[BTR_MAX_LEVELS];
@@ -2846,7 +2844,9 @@ btr_cur_open_at_rnd_pos_func(
 
 	ut_ad(!(latch_mode & BTR_MODIFY_EXTERNAL));
 
-	savepoint = mtr_set_savepoint(mtr);
+	ulint savepoint = mtr_set_savepoint(mtr);
+
+	rw_lock_type_t upper_rw_latch;
 
 	switch (latch_mode) {
 	case BTR_MODIFY_TREE:
@@ -2893,7 +2893,8 @@ btr_cur_open_at_rnd_pos_func(
 		return(false);
 	}
 
-	root_leaf_rw_latch = btr_cur_latch_for_root_leaf(latch_mode);
+	const rw_lock_type_t root_leaf_rw_latch = btr_cur_latch_for_root_leaf(
+		latch_mode);
 
 	page_cursor = btr_cur_get_page_cur(cursor);
 	cursor->index = index;
@@ -2914,7 +2915,8 @@ btr_cur_open_at_rnd_pos_func(
 		ut_ad(n_blocks < BTR_MAX_LEVELS);
 		tree_savepoints[n_blocks] = mtr_set_savepoint(mtr);
 
-		const ulint rw_latch = height && latch_mode != BTR_MODIFY_TREE
+		const rw_lock_type_t rw_latch = height
+			&& latch_mode != BTR_MODIFY_TREE
 			? upper_rw_latch : RW_NO_LATCH;
 		buf_block_t* block = buf_page_get_gen(page_id, zip_size,
 						      rw_latch, NULL, BUF_GET,
