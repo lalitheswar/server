@@ -2320,18 +2320,6 @@ static Sys_var_ulong Sys_max_length_for_sort_data(
        SESSION_VAR(max_length_for_sort_data), CMD_LINE(REQUIRED_ARG),
        VALID_RANGE(4, 8192*1024L), DEFAULT(1024), BLOCK_SIZE(1));
 
-static Sys_var_ulong Sys_max_long_data_size(
-       "max_long_data_size",
-       "The maximum BLOB length to send to server from "
-       "mysql_send_long_data API. Deprecated option; "
-       "use max_allowed_packet instead.",
-       READ_ONLY GLOBAL_VAR(max_long_data_size),
-       CMD_LINE(REQUIRED_ARG, OPT_MAX_LONG_DATA_SIZE),
-       VALID_RANGE(1024, UINT_MAX32), DEFAULT(1024*1024),
-       BLOCK_SIZE(1), NO_MUTEX_GUARD, NOT_IN_BINLOG,
-       ON_CHECK(0), ON_UPDATE(0),
-       DEPRECATED("'@@max_allowed_packet'"));
-
 static PolyLock_mutex PLock_prepared_stmt_count(&LOCK_prepared_stmt_count);
 static Sys_var_uint Sys_max_prepared_stmt_count(
        "max_prepared_stmt_count",
@@ -3881,7 +3869,7 @@ static Sys_var_ulonglong Sys_tmp_table_size(
        "If an internal in-memory temporary table exceeds this size, MariaDB "
        "will automatically convert it to an on-disk MyISAM or Aria table.",
        SESSION_VAR(tmp_memory_table_size), CMD_LINE(REQUIRED_ARG),
-       VALID_RANGE(1024, (ulonglong)~(intptr)0), DEFAULT(16*1024*1024),
+       VALID_RANGE(0, (ulonglong)~(intptr)0), DEFAULT(16*1024*1024),
        BLOCK_SIZE(1));
 
 static Sys_var_ulonglong Sys_tmp_memory_table_size(
@@ -3890,7 +3878,7 @@ static Sys_var_ulonglong Sys_tmp_memory_table_size(
        "will automatically convert it to an on-disk MyISAM or Aria table. "
        "Same as tmp_table_size.",
        SESSION_VAR(tmp_memory_table_size), CMD_LINE(REQUIRED_ARG),
-       VALID_RANGE(1024, (ulonglong)~(intptr)0), DEFAULT(16*1024*1024),
+       VALID_RANGE(0, (ulonglong)~(intptr)0), DEFAULT(16*1024*1024),
        BLOCK_SIZE(1));
 
 static Sys_var_ulonglong Sys_tmp_disk_table_size(
@@ -4172,9 +4160,10 @@ export sys_var *Sys_autocommit_ptr= &Sys_autocommit; // for sql_yacc.yy
 static Sys_var_mybool Sys_big_tables(
        "big_tables", "Old variable, which if set to 1, allows large result sets "
        "by saving all temporary sets to disk, avoiding 'table full' errors. No "
-       "longer needed, as the server now handles this automatically. "
-       "sql_big_tables is a synonym.",
-       SESSION_VAR(big_tables), CMD_LINE(OPT_ARG), DEFAULT(FALSE));
+       "longer needed, as the server now handles this automatically.",
+       SESSION_VAR(big_tables), CMD_LINE(OPT_ARG), DEFAULT(FALSE),
+       NO_MUTEX_GUARD, NOT_IN_BINLOG, ON_CHECK(0), ON_UPDATE(0),
+       DEPRECATED(""));
 
 static Sys_var_bit Sys_big_selects(
        "sql_big_selects", "If set to 0, MariaDB will not perform large SELECTs."

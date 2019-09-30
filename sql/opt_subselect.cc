@@ -4522,7 +4522,7 @@ SJ_TMP_TABLE::create_sj_weedout_tmp_table(THD *thd)
   }
 
   uint reclength= field->pack_length();
-  if (using_unique_constraint)
+  if (using_unique_constraint || thd->variables.tmp_memory_table_size == 0)
   { 
     share->db_plugin= ha_lock_engine(0, TMP_ENGINE_HTON);
     table->file= get_new_handler(share, &table->mem_root,
@@ -4607,7 +4607,7 @@ SJ_TMP_TABLE::create_sj_weedout_tmp_table(THD *thd)
     share->max_rows= (ha_rows) (((share->db_type() == heap_hton) ?
                                  MY_MIN(thd->variables.tmp_memory_table_size,
                                         thd->variables.max_heap_table_size) :
-                                 thd->variables.tmp_memory_table_size) /
+                                 thd->variables.tmp_disk_table_size) /
 			         share->reclength);
   set_if_bigger(share->max_rows,1);		// For dummy start options
 

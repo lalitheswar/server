@@ -306,7 +306,7 @@ COMMAND_LINE_ARGUMENT	REQUIRED
 VARIABLE_NAME	BIG_TABLES
 VARIABLE_SCOPE	SESSION
 VARIABLE_TYPE	BOOLEAN
-VARIABLE_COMMENT	Old variable, which if set to 1, allows large result sets by saving all temporary sets to disk, avoiding 'table full' errors. No longer needed, as the server now handles this automatically. sql_big_tables is a synonym.
+VARIABLE_COMMENT	Old variable, which if set to 1, allows large result sets by saving all temporary sets to disk, avoiding 'table full' errors. No longer needed, as the server now handles this automatically.
 NUMERIC_MIN_VALUE	NULL
 NUMERIC_MAX_VALUE	NULL
 NUMERIC_BLOCK_SIZE	NULL
@@ -2032,16 +2032,6 @@ NUMERIC_MAX_VALUE	8388608
 NUMERIC_BLOCK_SIZE	1
 ENUM_VALUE_LIST	NULL
 READ_ONLY	NO
-COMMAND_LINE_ARGUMENT	REQUIRED
-VARIABLE_NAME	MAX_LONG_DATA_SIZE
-VARIABLE_SCOPE	GLOBAL
-VARIABLE_TYPE	BIGINT UNSIGNED
-VARIABLE_COMMENT	The maximum BLOB length to send to server from mysql_send_long_data API. Deprecated option; use max_allowed_packet instead.
-NUMERIC_MIN_VALUE	1024
-NUMERIC_MAX_VALUE	4294967295
-NUMERIC_BLOCK_SIZE	1
-ENUM_VALUE_LIST	NULL
-READ_ONLY	YES
 COMMAND_LINE_ARGUMENT	REQUIRED
 VARIABLE_NAME	MAX_PASSWORD_ERRORS
 VARIABLE_SCOPE	GLOBAL
@@ -4337,7 +4327,7 @@ VARIABLE_NAME	TMP_MEMORY_TABLE_SIZE
 VARIABLE_SCOPE	SESSION
 VARIABLE_TYPE	BIGINT UNSIGNED
 VARIABLE_COMMENT	If an internal in-memory temporary table exceeds this size, MariaDB will automatically convert it to an on-disk MyISAM or Aria table. Same as tmp_table_size.
-NUMERIC_MIN_VALUE	1024
+NUMERIC_MIN_VALUE	0
 NUMERIC_MAX_VALUE	18446744073709551615
 NUMERIC_BLOCK_SIZE	1
 ENUM_VALUE_LIST	NULL
@@ -4347,7 +4337,7 @@ VARIABLE_NAME	TMP_TABLE_SIZE
 VARIABLE_SCOPE	SESSION
 VARIABLE_TYPE	BIGINT UNSIGNED
 VARIABLE_COMMENT	Alias for tmp_memory_table_size. If an internal in-memory temporary table exceeds this size, MariaDB will automatically convert it to an on-disk MyISAM or Aria table.
-NUMERIC_MIN_VALUE	1024
+NUMERIC_MIN_VALUE	0
 NUMERIC_MAX_VALUE	18446744073709551615
 NUMERIC_BLOCK_SIZE	1
 ENUM_VALUE_LIST	NULL
