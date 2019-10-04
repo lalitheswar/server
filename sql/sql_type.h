@@ -3329,8 +3329,9 @@ protected:
                                                     enum_field_types type)
                                                     const;
 public:
-  static const Type_handler *handler_by_name(const LEX_CSTRING &name);
-  static const Type_handler *handler_by_name_or_error(const LEX_CSTRING &name);
+  static const Type_handler *handler_by_name(THD *thd, const LEX_CSTRING &name);
+  static const Type_handler *handler_by_name_or_error(THD *thd,
+                                                      const LEX_CSTRING &name);
   static const Type_handler *odbc_literal_type_handler(const LEX_CSTRING *str);
   static const Type_handler *blob_type_handler(uint max_octet_length);
   static const Type_handler *string_type_handler(uint max_octet_length);
