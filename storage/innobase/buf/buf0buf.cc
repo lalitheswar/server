@@ -4225,192 +4225,6 @@ buf_wait_for_read(
 	}
 }
 
-/** Get the uncompressed block for a ROW_FORMAT=COMPRESSED page.
-@param[in]	buf_pool	buffer pool instance
-@param[in]	bpage		block which was read from file
-@param[in]	mode		BUF_GET, BUF_GET_IF_IN_POOL,
-BUF_PEEK_IF_IN_POOL, BUF_GET_NO_LATCH, or BUF_GET_IF_IN_POOL_OR_WATCH
-@param[in]	file		file name
-@param[in]	line		line where called
-@param[out]	err		DB_SUCCESS or error code
-@param[out]	zip_err		Compressed error
-@return pointer to the block
-@return	NULL if the page cannot be uncompressed at the moment */
-static
-buf_block_t*
-buf_block_for_zip_page(
-	buf_pool_t*	buf_pool,
-	buf_page_t*	bpage,
-	ulint		mode,
-	const char*	file,
-	unsigned	line,
-	dberr_t*	err,
-	zip_err_t*	zip_err)
-{
-	buf_block_t*	block;
-
-	/* Note: We have already buffer fixed this block. */
-	if (bpage->buf_fix_count > 1
-	    || buf_page_get_io_fix(bpage) != BUF_IO_NONE) {
-
-		/* This condition often occurs when the buffer
-		is not buffer-fixed, but I/O-fixed by
-		buf_page_init_for_read(). */
-		bpage->unfix();
-
-		/* The block is buffer-fixed or I/O-fixed.
-		Try again later. */
-		os_thread_sleep(WAIT_FOR_READ);
-
-		*zip_err = RETRY_AGAIN;
-		return NULL;
-	}
-
-	if (UNIV_UNLIKELY(mode == BUF_EVICT_IF_IN_POOL)) {
-		*zip_err = POOL_EVICT;
-		return NULL;
-	}
-
-	/* Buffer-fix the block so that it cannot be evicted
-	or relocated while we are attempting to allocate an
-	uncompressed page. */
-
-	block = buf_LRU_get_free_block(buf_pool);
-	const page_id_t page_id (bpage->id);
-
-	buf_pool_mutex_enter(buf_pool);
-
-	/* If not own buf_pool_mutex, page_hash can be changed. */
-	rw_lock_t* hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
-
-	rw_lock_x_lock(hash_lock);
-
-	/* Buffer-fixing prevents the page_hash from changing. */
-	ut_ad(bpage == buf_page_hash_get_low(buf_pool, page_id));
-
-	bpage->unfix();
-
-	buf_page_mutex_enter(block);
-	mutex_enter(&buf_pool->zip_mutex);
-
-	buf_block_t* fix_block = block;
-
-	if (bpage->buf_fix_count > 0
-	    || buf_page_get_io_fix(bpage) != BUF_IO_NONE) {
-
-		mutex_exit(&buf_pool->zip_mutex);
-		/* The block was buffer-fixed or I/O-fixed while
-		buf_pool->mutex was not held by this thread.
-		Free the block that was allocated and retry.
-		This should be extremely unlikely, for example,
-		if buf_page_get_zip() was invoked. */
-
-		buf_LRU_block_free_non_file_page(block);
-		buf_pool_mutex_exit(buf_pool);
-		rw_lock_x_unlock(hash_lock);
-		buf_page_mutex_exit(block);
-
-		*zip_err = RETRY_AGAIN_AND_ASSIGN;
-		return block;
-	}
-
-	/* Move the compressed page from bpage to block,
-	and uncompress it. */
-
-	/* Note: this is the uncompressed block and it is not
-	accessible by other threads yet because it is not in
-	any list or hash table */
-	buf_relocate(bpage, &block->page);
-
-	buf_block_init_low(block);
-
-	/* Set after buf_relocate(). */
-	block->page.buf_fix_count = 1;
-
-	block->lock_hash_val = lock_rec_hash(page_id.space(),
-			page_id.page_no());
-
-	UNIV_MEM_DESC(&block->page.zip.data,
-			page_zip_get_size(&block->page.zip));
-
-	if (buf_page_get_state(&block->page) == BUF_BLOCK_ZIP_PAGE) {
-#if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
-		UT_LIST_REMOVE(buf_pool->zip_clean, &block->page);
-#endif /* UNIV_DEBUG || UNIV_BUF_DEBUG */
-		ut_ad(!block->page.in_flush_list);
-	} else {
-		/* Relocate buf_pool->flush_list. */
-		buf_flush_relocate_on_flush_list(bpage, &block->page);
-	}
-
-	/* Buffer-fix, I/O-fix, and X-latch the block
-	for the duration of the decompression.
-	Also add the block to the unzip_LRU list. */
-	block->page.state = BUF_BLOCK_FILE_PAGE;
-
-	/* Insert at the front of unzip_LRU list */
-	buf_unzip_LRU_add_block(block, FALSE);
-
-	buf_block_set_io_fix(block, BUF_IO_READ);
-	rw_lock_x_lock_inline(&block->lock, 0, file, line);
-
-	UNIV_MEM_INVALID(bpage, sizeof *bpage);
-
-	rw_lock_x_unlock(hash_lock);
-	buf_pool->n_pend_unzip++;
-	mutex_exit(&buf_pool->zip_mutex);
-	buf_pool_mutex_exit(buf_pool);
-
-	unsigned access_time = buf_page_is_accessed(&block->page);
-
-	buf_page_mutex_exit(block);
-
-	buf_page_free_descriptor(bpage);
-
-	/* Decompress the page while not holding
-	buf_pool->mutex or block->mutex. */
-
-	if (!buf_zip_decompress(block, TRUE)) {
-		buf_pool_mutex_enter(buf_pool);
-		buf_page_mutex_enter(fix_block);
-		buf_block_set_io_fix(fix_block, BUF_IO_NONE);
-		buf_page_mutex_exit(fix_block);
-
-		--buf_pool->n_pend_unzip;
-		fix_block->unfix();
-		buf_pool_mutex_exit(buf_pool);
-		rw_lock_x_unlock(&fix_block->lock);
-
-		if (err) {
-			*err = DB_PAGE_CORRUPTED;
-		}
-
-		*zip_err = FAIL;
-		return NULL;
-	}
-
-	if (!access_time && !recv_no_ibuf_operations
-	    && ibuf_page_exists(block->page)) {
-		block->page.ibuf_exist = true;
-	}
-
-	buf_pool_mutex_enter(buf_pool);
-
-	buf_page_mutex_enter(fix_block);
-	buf_block_set_io_fix(fix_block, BUF_IO_NONE);
-	buf_page_mutex_exit(fix_block);
-
-	--buf_pool->n_pend_unzip;
-
-	buf_pool_mutex_exit(buf_pool);
-
-	rw_lock_x_unlock(&block->lock);
-
-	*zip_err = SUCCESS;
-
-	return block;
-}
-
 /** This is the general function used to get access to a database page.
 @param[in]	page_id			page id
 @param[in]	zip_size		ROW_FORMAT=COMPRESSED page size, or 0
@@ -4713,14 +4527,11 @@ got_block:
 		}
 	}
 
-	switch (buf_block_get_state(fix_block)) {
-		buf_page_t*	bpage;
-		zip_err_t	zip_err;
-
+	switch (UNIV_EXPECT(buf_block_get_state(fix_block),
+			    BUF_BLOCK_FILE_PAGE)) {
 	case BUF_BLOCK_FILE_PAGE:
-		bpage = &block->page;
 		if (fsp_is_system_temporary(page_id.space())
-		    && buf_page_get_io_fix(bpage) != BUF_IO_NONE) {
+		    && buf_block_get_io_fix(block) != BUF_IO_NONE) {
 			/* This suggests that the page is being flushed.
 			Avoid returning reference to this page.
 			Instead wait for the flush action to complete. */
@@ -4743,9 +4554,16 @@ evict_from_pool:
 			return(NULL);
 		}
 		break;
+	default:
+		ut_error;
+		break;
 
 	case BUF_BLOCK_ZIP_PAGE:
 	case BUF_BLOCK_ZIP_DIRTY:
+		if (UNIV_UNLIKELY(mode == BUF_EVICT_IF_IN_POOL)) {
+			goto evict_from_pool;
+		}
+
 		if (mode == BUF_PEEK_IF_IN_POOL) {
 			/* This mode is only used for dropping an
 			adaptive hash index.  There cannot be an
@@ -4756,33 +4574,158 @@ evict_from_pool:
 			return(NULL);
 		}
 
-		block = buf_block_for_zip_page(
-			buf_pool, &fix_block->page, mode, file, line,
-			err, &zip_err);
+		buf_page_t* bpage = &block->page;
 
-		if (block) {
-			fix_block = block;
-		} else if (zip_err == RETRY_AGAIN) {
+		/* Note: We have already buffer fixed this block. */
+		if (bpage->buf_fix_count > 1
+		    || buf_page_get_io_fix(bpage) != BUF_IO_NONE) {
+
+			/* This condition often occurs when the buffer
+			is not buffer-fixed, but I/O-fixed by
+			buf_page_init_for_read(). */
+			fix_block->unfix();
+
+			/* The block is buffer-fixed or I/O-fixed.
+			Try again later. */
+			os_thread_sleep(WAIT_FOR_READ);
+
 			goto loop;
-		} else if (zip_err == POOL_EVICT) {
-			goto evict_from_pool;
-		} else if (zip_err == FAIL) {
+		}
+
+		/* Buffer-fix the block so that it cannot be evicted
+		or relocated while we are attempting to allocate an
+		uncompressed page. */
+
+		block = buf_LRU_get_free_block(buf_pool);
+
+		buf_pool_mutex_enter(buf_pool);
+
+		/* If not own buf_pool_mutex, page_hash can be changed. */
+		hash_lock = buf_page_hash_lock_get(buf_pool, page_id);
+
+		rw_lock_x_lock(hash_lock);
+
+		/* Buffer-fixing prevents the page_hash from changing. */
+		ut_ad(bpage == buf_page_hash_get_low(buf_pool, page_id));
+
+		fix_block->unfix();
+
+		buf_page_mutex_enter(block);
+		mutex_enter(&buf_pool->zip_mutex);
+
+		fix_block = block;
+
+		if (bpage->buf_fix_count > 0
+		    || buf_page_get_io_fix(bpage) != BUF_IO_NONE) {
+
+			mutex_exit(&buf_pool->zip_mutex);
+			/* The block was buffer-fixed or I/O-fixed while
+			buf_pool->mutex was not held by this thread.
+			Free the block that was allocated and retry.
+			This should be extremely unlikely, for example,
+			if buf_page_get_zip() was invoked. */
+
+			buf_LRU_block_free_non_file_page(block);
+			buf_pool_mutex_exit(buf_pool);
+			rw_lock_x_unlock(hash_lock);
+			buf_page_mutex_exit(block);
+
+			/* Try again */
+			goto loop;
+		}
+
+		/* Move the compressed page from bpage to block,
+		and uncompress it. */
+
+		/* Note: this is the uncompressed block and it is not
+		accessible by other threads yet because it is not in
+		any list or hash table */
+		buf_relocate(bpage, &block->page);
+
+		buf_block_init_low(block);
+
+		/* Set after buf_relocate(). */
+		block->page.buf_fix_count = 1;
+
+		block->lock_hash_val = lock_rec_hash(page_id.space(),
+						     page_id.page_no());
+
+		UNIV_MEM_DESC(&block->page.zip.data,
+			      page_zip_get_size(&block->page.zip));
+
+		if (buf_page_get_state(&block->page) == BUF_BLOCK_ZIP_PAGE) {
+#if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
+			UT_LIST_REMOVE(buf_pool->zip_clean, &block->page);
+#endif /* UNIV_DEBUG || UNIV_BUF_DEBUG */
+			ut_ad(!block->page.in_flush_list);
+		} else {
+			/* Relocate buf_pool->flush_list. */
+			buf_flush_relocate_on_flush_list(bpage, &block->page);
+		}
+
+		/* Buffer-fix, I/O-fix, and X-latch the block
+		for the duration of the decompression.
+		Also add the block to the unzip_LRU list. */
+		block->page.state = BUF_BLOCK_FILE_PAGE;
+
+		/* Insert at the front of unzip_LRU list */
+		buf_unzip_LRU_add_block(block, FALSE);
+
+		buf_block_set_io_fix(block, BUF_IO_READ);
+		rw_lock_x_lock_inline(&block->lock, 0, file, line);
+
+		UNIV_MEM_INVALID(bpage, sizeof *bpage);
+
+		rw_lock_x_unlock(hash_lock);
+		buf_pool->n_pend_unzip++;
+		mutex_exit(&buf_pool->zip_mutex);
+		buf_pool_mutex_exit(buf_pool);
+
+		access_time = buf_page_is_accessed(&block->page);
+
+		buf_page_mutex_exit(block);
+
+		if (!access_time && !recv_no_ibuf_operations
+		    && ibuf_page_exists(block->page)) {
+			block->page.ibuf_exist = true;
+		}
+
+		buf_page_free_descriptor(bpage);
+
+		/* Decompress the page while not holding
+		buf_pool->mutex or block->mutex. */
+
+		if (!buf_zip_decompress(block, TRUE)) {
+			buf_pool_mutex_enter(buf_pool);
+			buf_page_mutex_enter(fix_block);
+			buf_block_set_io_fix(fix_block, BUF_IO_NONE);
+			buf_page_mutex_exit(fix_block);
+
+			--buf_pool->n_pend_unzip;
+			fix_block->unfix();
+			buf_pool_mutex_exit(buf_pool);
+			rw_lock_x_unlock(&fix_block->lock);
+
+			if (err) {
+				*err = DB_PAGE_CORRUPTED;
+			}
 			return NULL;
 		}
 
-		if (zip_err == RETRY_AGAIN_AND_ASSIGN) {
-			goto loop;
-		}
+		buf_pool_mutex_enter(buf_pool);
 
-		ut_ad(zip_err == SUCCESS);
-		break;
+		buf_page_mutex_enter(fix_block);
 
-	case BUF_BLOCK_POOL_WATCH:
-	case BUF_BLOCK_NOT_USED:
-	case BUF_BLOCK_READY_FOR_USE:
-	case BUF_BLOCK_MEMORY:
-	case BUF_BLOCK_REMOVE_HASH:
-		ut_error;
+		buf_block_set_io_fix(fix_block, BUF_IO_NONE);
+
+		buf_page_mutex_exit(fix_block);
+
+		--buf_pool->n_pend_unzip;
+
+		buf_pool_mutex_exit(buf_pool);
+
+		rw_lock_x_unlock(&block->lock);
+
 		break;
 	}
 

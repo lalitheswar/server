@@ -122,15 +122,6 @@ enum buf_page_state {
 					before putting to the free list */
 };
 
-/** Possible results while finding the block for the compressed page. */
-enum zip_err_t {
-	RETRY_AGAIN,
-	RETRY_AGAIN_AND_ASSIGN,
-	POOL_EVICT,
-	FAIL,
-	SUCCESS
-};
-
 /** This structure defines information we will fetch from each buffer pool. It
 will be used to print table IO stats */
 struct buf_pool_info_t{
