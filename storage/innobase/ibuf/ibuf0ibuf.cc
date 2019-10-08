@@ -4214,6 +4214,12 @@ bool ibuf_page_exists(const buf_page_t& bpage)
 	ut_ad(buf_page_get_io_fix(&bpage) == BUF_IO_READ
 	      || recv_recovery_is_on());
 	ut_ad(!fsp_is_system_temporary(bpage.id.space()));
+	ut_ad(buf_page_in_file(&bpage));
+	ut_ad(buf_page_get_state(&bpage) != BUF_BLOCK_FILE_PAGE
+	      || bpage.io_fix == BUF_IO_READ
+	      || rw_lock_own(&const_cast<buf_block_t&>
+			     (reinterpret_cast<const buf_block_t&>
+			      (bpage)).lock, RW_LOCK_X));
 
 	const ulint physical_size = bpage.physical_size();
 
