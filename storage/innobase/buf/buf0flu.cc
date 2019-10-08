@@ -789,6 +789,7 @@ buf_flush_init_for_writing(
 	ut_ad(block == NULL || page_zip_ == NULL
 	      || &block->page.zip == page_zip_);
 	ut_ad(page);
+	ut_ad(!block || fil_page_get_type(block->frame));
 
 	if (page_zip_) {
 		page_zip_des_t*	page_zip;

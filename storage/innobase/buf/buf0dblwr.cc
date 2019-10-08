@@ -264,6 +264,8 @@ too_small:
 
 		ut_ad(rw_lock_get_x_lock_count(&new_block->lock) == 1);
 		page_no = new_block->page.id.page_no();
+		mlog_write_ulint(FIL_PAGE_TYPE + new_block->frame,
+				 FIL_PAGE_TYPE_SYS, MLOG_2BYTES, &mtr);
 
 		if (i == FSP_EXTENT_SIZE / 2) {
 			ut_a(page_no == FSP_EXTENT_SIZE);
@@ -326,6 +328,7 @@ too_small:
 
 	/* Flush the modified pages to disk and make a checkpoint */
 	log_make_checkpoint_at(LSN_MAX);
+	buf_dblwr_being_created = FALSE;
 
 	/* Remove doublewrite pages from LRU */
 	buf_pool_invalidate();
