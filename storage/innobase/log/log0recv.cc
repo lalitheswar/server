@@ -1990,11 +1990,9 @@ void recv_recover_page(buf_page_t* bpage)
 	x-latch on it.  This is needed for the operations to
 	the page to pass the debug checks. */
 	rw_lock_x_lock_move_ownership(&block->lock);
-	buf_block_dbg_add_level(block, SYNC_NO_ORDER_CHECK);
-	ibool	success = buf_page_get_known_nowait(
-		RW_X_LATCH, block, BUF_KEEP_OLD,
-		__FILE__, __LINE__, &mtr);
-	ut_a(success);
+	buf_block_buf_fix_inc(block, __FILE__, __LINE__);
+	rw_lock_x_lock(&block->lock);
+	mtr.memo_push(block, MTR_MEMO_PAGE_X_FIX);
 
 	mutex_enter(&recv_sys.mutex);
 	if (recv_sys.apply_log_recs) {

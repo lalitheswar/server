@@ -67,16 +67,6 @@ struct fil_addr_t;
 					if the file page has been freed. */
 #define BUF_EVICT_IF_IN_POOL	20	/*!< evict a clean block if found */
 /* @} */
-/** @name Modes for buf_page_get_known_nowait */
-/* @{ */
-#define BUF_MAKE_YOUNG	51		/*!< Move the block to the
-					start of the LRU list if there
-					is a danger that the block
-					would drift out of the buffer
-					pool*/
-#define BUF_KEEP_OLD	52		/*!< Preserve the current LRU
-					position of the block. */
-/* @} */
 
 #define MAX_BUFFER_POOLS_BITS	6	/*!< Number of bits to representing
 					a buffer pool ID */
@@ -389,19 +379,6 @@ buf_page_optimistic_get(
 	const char*	file,	/*!< in: file name */
 	unsigned	line,	/*!< in: line where called */
 	mtr_t*		mtr);	/*!< in: mini-transaction */
-/********************************************************************//**
-This is used to get access to a known database page, when no waiting can be
-done.
-@return TRUE if success */
-ibool
-buf_page_get_known_nowait(
-/*======================*/
-	ulint		rw_latch,/*!< in: RW_S_LATCH, RW_X_LATCH */
-	buf_block_t*	block,	/*!< in: the known page */
-	ulint		mode,	/*!< in: BUF_MAKE_YOUNG or BUF_KEEP_OLD */
-	const char*	file,	/*!< in: file name */
-	unsigned	line,	/*!< in: line where called */
-	mtr_t*		mtr);	/*!< in: mini-transaction */
 
 /** Given a tablespace id and page number tries to get that page. If the
 page is not in the buffer pool it is not loaded and NULL is returned.
@@ -550,28 +527,36 @@ buf_block_get_freed_page_clock(
 	const buf_block_t*	block)	/*!< in: block */
 	MY_ATTRIBUTE((warn_unused_result));
 
-/********************************************************************//**
-Tells if a block is still close enough to the MRU end of the LRU list
+/** Determine if a block is still close enough to the MRU end of the LRU list
 meaning that it is not in danger of getting evicted and also implying
 that it has been accessed recently.
 Note that this is for heuristics only and does not reserve buffer pool
 mutex.
-@return TRUE if block is close to MRU end of LRU */
-UNIV_INLINE
-ibool
-buf_page_peek_if_young(
-/*===================*/
-	const buf_page_t*	bpage);	/*!< in: block */
-/********************************************************************//**
-Recommends a move of a block to the start of the LRU list if there is danger
-of dropping from the buffer pool. NOTE: does not reserve the buffer pool
-mutex.
-@return TRUE if should be made younger */
-UNIV_INLINE
-ibool
-buf_page_peek_if_too_old(
-/*=====================*/
-	const buf_page_t*	bpage);	/*!< in: block to make younger */
+@param[in]	buf_pool	buffer pool
+@param[in]	bpage		buffer pool page
+@return whether bpage is close to MRU end of LRU */
+inline bool buf_page_peek_if_young(const buf_pool_t* buf_pool,
+				   const buf_page_t* bpage);
+
+/** Determine if a block should be moved to the start of the LRU list if
+there is danger of dropping from the buffer pool.
+@param[in,out]	buf_pool	buffer pool
+@param[in]	bpage		buffer pool page
+@return true if bpage should be made younger */
+inline bool buf_page_peek_if_too_old(buf_pool_t* buf_pool,
+				     const buf_page_t* bpage);
+
+/** Move a page to the start of the buffer pool LRU list if it is too old.
+@param[in,out]	buf_pool	buffer pool
+@param[in,out]	bpage		buffer pool page */
+inline void buf_page_make_young_if_needed(buf_pool_t* buf_pool,
+					  buf_page_t* bpage)
+{
+	if (UNIV_UNLIKELY(buf_page_peek_if_too_old(buf_pool, bpage))) {
+		buf_page_make_young(bpage);
+	}
+}
+
 /********************************************************************//**
 Gets the youngest modification log sequence number for a frame.
 Returns zero if not file page or no modification occurred yet.

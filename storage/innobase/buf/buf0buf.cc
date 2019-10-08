@@ -3716,28 +3716,6 @@ buf_page_make_young(
 	buf_pool_mutex_exit(buf_pool);
 }
 
-/********************************************************************//**
-Moves a page to the start of the buffer pool LRU list if it is too old.
-This high-level function can be used to prevent an important page from
-slipping out of the buffer pool. */
-static
-void
-buf_page_make_young_if_needed(
-/*==========================*/
-	buf_page_t*	bpage)		/*!< in/out: buffer block of a
-					file page */
-{
-#ifdef UNIV_DEBUG
-	buf_pool_t*	buf_pool = buf_pool_from_bpage(bpage);
-	ut_ad(!buf_pool_mutex_own(buf_pool));
-#endif /* UNIV_DEBUG */
-	ut_a(buf_page_in_file(bpage));
-
-	if (buf_page_peek_if_too_old(bpage)) {
-		buf_page_make_young(bpage);
-	}
-}
-
 #ifdef UNIV_DEBUG
 
 /** Sets file_page_was_freed TRUE if the page is found in the buffer pool.
@@ -3921,7 +3899,7 @@ got_block:
 
 	mutex_exit(block_mutex);
 
-	buf_page_make_young_if_needed(bpage);
+	buf_page_make_young_if_needed(buf_pool, bpage);
 
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
 	ut_a(++buf_dbg_counter % 5771 || buf_validate());
@@ -4932,7 +4910,7 @@ evict_from_pool:
 	}
 
 	if (mode != BUF_PEEK_IF_IN_POOL) {
-		buf_page_make_young_if_needed(&fix_block->page);
+		buf_page_make_young_if_needed(buf_pool, &fix_block->page);
 	}
 
 #if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
@@ -5032,7 +5010,6 @@ buf_page_optimistic_get(
 	unsigned	line,	/*!< in: line where called */
 	mtr_t*		mtr)	/*!< in: mini-transaction */
 {
-	buf_pool_t*	buf_pool;
 	unsigned	access_time;
 	ibool		success;
 
@@ -5058,7 +5035,8 @@ buf_page_optimistic_get(
 
 	buf_page_mutex_exit(block);
 
-	buf_page_make_young_if_needed(&block->page);
+	buf_pool_t* buf_pool = buf_pool_from_block(block);
+	buf_page_make_young_if_needed(buf_pool, &block->page);
 
 	ut_ad(!ibuf_inside(mtr)
 	      || ibuf_page(block->page.id, block->zip_size(), NULL));
@@ -5118,98 +5096,6 @@ buf_page_optimistic_get(
 		buf_read_ahead_linear(block->page.id, block->zip_size(),
 				      ibuf_inside(mtr));
 	}
-
-	buf_pool = buf_pool_from_block(block);
-	buf_pool->stat.n_page_gets++;
-
-	return(TRUE);
-}
-
-/********************************************************************//**
-This is used to get access to a known database page, when no waiting can be
-done. For example, if a search in an adaptive hash index leads us to this
-frame.
-@return TRUE if success */
-ibool
-buf_page_get_known_nowait(
-/*======================*/
-	ulint		rw_latch,/*!< in: RW_S_LATCH, RW_X_LATCH */
-	buf_block_t*	block,	/*!< in: the known page */
-	ulint		mode,	/*!< in: BUF_MAKE_YOUNG or BUF_KEEP_OLD */
-	const char*	file,	/*!< in: file name */
-	unsigned	line,	/*!< in: line where called */
-	mtr_t*		mtr)	/*!< in: mini-transaction */
-{
-	buf_pool_t*	buf_pool;
-	ibool		success;
-
-	ut_ad(mtr->is_active());
-	ut_ad((rw_latch == RW_S_LATCH) || (rw_latch == RW_X_LATCH));
-
-	buf_page_mutex_enter(block);
-
-	if (buf_block_get_state(block) == BUF_BLOCK_REMOVE_HASH) {
-		/* Another thread is just freeing the block from the LRU list
-		of the buffer pool: do not try to access this page; this
-		attempt to access the page can only come through the hash
-		index because when the buffer block state is ..._REMOVE_HASH,
-		we have already removed it from the page address hash table
-		of the buffer pool. */
-
-		buf_page_mutex_exit(block);
-
-		return(FALSE);
-	}
-
-	ut_a(buf_block_get_state(block) == BUF_BLOCK_FILE_PAGE);
-
-	buf_block_buf_fix_inc(block, file, line);
-
-	buf_page_set_accessed(&block->page);
-
-	buf_page_mutex_exit(block);
-
-	buf_pool = buf_pool_from_block(block);
-
-	if (mode == BUF_MAKE_YOUNG) {
-		buf_page_make_young_if_needed(&block->page);
-	}
-
-	ut_ad(!ibuf_inside(mtr) || mode == BUF_KEEP_OLD);
-
-	mtr_memo_type_t	fix_type;
-
-	switch (rw_latch) {
-	case RW_S_LATCH:
-		success = rw_lock_s_lock_nowait(&block->lock, file, line);
-		fix_type = MTR_MEMO_PAGE_S_FIX;
-		break;
-	case RW_X_LATCH:
-		success = rw_lock_x_lock_func_nowait_inline(
-			&block->lock, file, line);
-
-		fix_type = MTR_MEMO_PAGE_X_FIX;
-		break;
-	default:
-		ut_error; /* RW_SX_LATCH is not implemented yet */
-	}
-
-	if (!success) {
-		buf_block_buf_fix_dec(block);
-		return(FALSE);
-	}
-
-	mtr_memo_push(mtr, block, fix_type);
-
-#if defined UNIV_DEBUG || defined UNIV_BUF_DEBUG
-	ut_a(++buf_dbg_counter % 5771 || buf_validate());
-	ut_a(block->page.buf_fix_count > 0);
-	ut_a(buf_block_get_state(block) == BUF_BLOCK_FILE_PAGE);
-#endif /* UNIV_DEBUG || UNIV_BUF_DEBUG */
-
-	ut_d(buf_page_mutex_enter(block));
-	ut_ad(!block->page.file_page_was_freed);
-	ut_d(buf_page_mutex_exit(block));
 
 	buf_pool->stat.n_page_gets++;
 

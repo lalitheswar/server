@@ -4271,6 +4271,7 @@ ibuf_merge_or_delete_for_page(
 	ulint		dops[IBUF_OP_COUNT];
 
 	ut_ad(block == NULL || page_id == block->page.id);
+	ut_ad(!block || buf_block_get_state(block) == BUF_BLOCK_FILE_PAGE);
 
 	if (trx_sys_hdr_page(page_id)
 	    || fsp_is_system_temporary(page_id.space())) {
@@ -4373,16 +4374,12 @@ loop:
 		&pcur, &mtr);
 
 	if (block != NULL) {
-		ibool success;
+		ut_ad(rw_lock_own(&block->lock, RW_LOCK_X));
+		buf_block_buf_fix_inc(block, __FILE__, __LINE__);
+		rw_lock_x_lock(&block->lock);
 
 		mtr.set_named_space(space);
-
-		success = buf_page_get_known_nowait(
-			RW_X_LATCH, block,
-			BUF_KEEP_OLD, __FILE__, __LINE__, &mtr);
-
-		ut_a(success);
-
+		mtr.memo_push(block, MTR_MEMO_PAGE_X_FIX);
 		/* This is a user page (secondary index leaf page),
 		but we pretend that it is a change buffer page in
 		order to obey the latching order. This should be OK,
@@ -4448,7 +4445,6 @@ loop:
 			ut_ad(page_validate(block->frame, dummy_index));
 
 			switch (op) {
-				ibool	success;
 			case IBUF_OP_INSERT:
 #ifdef UNIV_IBUF_DEBUG
 				volume += rec_get_converted_size(
@@ -4497,11 +4493,11 @@ loop:
 				ibuf_mtr_start(&mtr);
 				mtr.set_named_space(space);
 
-				success = buf_page_get_known_nowait(
-					RW_X_LATCH, block,
-					BUF_KEEP_OLD,
-					__FILE__, __LINE__, &mtr);
-				ut_a(success);
+				ut_ad(rw_lock_own(&block->lock, RW_LOCK_X));
+				buf_block_buf_fix_inc(block,
+						      __FILE__, __LINE__);
+				rw_lock_x_lock(&block->lock);
+				mtr.memo_push(block, MTR_MEMO_PAGE_X_FIX);
 
 				/* This is a user page (secondary
 				index leaf page), but it should be OK

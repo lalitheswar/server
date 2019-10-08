@@ -312,7 +312,7 @@ buf_read_ahead_random(const page_id_t page_id, ulint zip_size, bool ibuf)
 
 		if (bpage != NULL
 		    && buf_page_is_accessed(bpage)
-		    && buf_page_peek_if_young(bpage)) {
+		    && buf_page_peek_if_young(buf_pool, bpage)) {
 
 			recent_blocks++;
 
