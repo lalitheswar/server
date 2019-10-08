@@ -19045,7 +19045,7 @@ static MYSQL_SYSVAR_ULONG(write_io_threads, srv_n_write_io_threads,
 
 static MYSQL_SYSVAR_ULONG(force_recovery, srv_force_recovery,
   PLUGIN_VAR_RQCMDARG | PLUGIN_VAR_READONLY,
-  "Helps to save your data in case the disk image of the database becomes corrupt.",
+  "Helps to save your data in case the disk image of the database becomes corrupt. Value 5 can return bogus data, and 6 can permanently corrupt data.",
   NULL, NULL, 0, 0, 6, 0);
 
 static MYSQL_SYSVAR_ULONG(page_size, srv_page_size,
