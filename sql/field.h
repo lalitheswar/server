@@ -2136,6 +2136,7 @@ public:
                   Information_schema_numeric_attributes(field_length) :
                   Information_schema_numeric_attributes(field_length, dec);
   }
+  void sql_type(String &str) const override;
   int save_in_field(Field *to) override { return to->store(val_real()); }
   bool memcpy_field_possible(const Field *from) const override
   {
@@ -2372,6 +2373,7 @@ public:
     uint32 prec= type_limits_int()->precision();
     return Information_schema_numeric_attributes(prec, 0);
   }
+  void sql_type(String &str) const override;
   SEL_ARG *get_mm_leaf(RANGE_OPT_PARAM *param, KEY_PART *key_part,
                        const Item_bool_func *cond,
                        scalar_comparison_op op, Item *value) override
@@ -2410,7 +2412,6 @@ public:
   int cmp(const uchar *,const uchar *) const override;
   void sort_string(uchar *buff,uint length) override;
   uint32 pack_length() const override { return 1; }
-  void sql_type(String &str) const override;
   const Type_limits_int *type_limits_int() const override
   {
     return type_handler_priv()->type_limits_int();
@@ -2472,7 +2473,6 @@ public:
   int cmp(const uchar *,const uchar *) const override;
   void sort_string(uchar *buff,uint length) override;
   uint32 pack_length() const override { return 2; }
-  void sql_type(String &str) const override;
   const Type_limits_int *type_limits_int() const override
   {
     return type_handler_priv()->type_limits_int();
@@ -2518,7 +2518,6 @@ public:
   int cmp(const uchar *,const uchar *) const override;
   void sort_string(uchar *buff,uint length) override;
   uint32 pack_length() const override { return 3; }
-  void sql_type(String &str) const override;
   const Type_limits_int *type_limits_int() const override
   {
     return type_handler_priv()->type_limits_int();
@@ -2569,7 +2568,6 @@ public:
   int cmp(const uchar *,const uchar *) const override;
   void sort_string(uchar *buff,uint length) override;
   uint32 pack_length() const override { return 4; }
-  void sql_type(String &str) const override;
   const Type_limits_int *type_limits_int() const override
   {
     return type_handler_priv()->type_limits_int();
@@ -2629,7 +2627,6 @@ public:
   int cmp(const uchar *,const uchar *) const override;
   void sort_string(uchar *buff,uint length) override;
   uint32 pack_length() const override { return 8; }
-  void sql_type(String &str) const override;
   const Type_limits_int *type_limits_int() const override
   {
     return type_handler_priv()->type_limits_int();
@@ -2731,7 +2728,6 @@ public:
   void sort_string(uchar *buff, uint length) override;
   uint32 pack_length() const override { return sizeof(float); }
   uint row_pack_length() const override { return pack_length(); }
-  void sql_type(String &str) const override;
   ulonglong get_max_int_value() const override
   {
     /*
@@ -2796,7 +2792,6 @@ public:
   void sort_string(uchar *buff, uint length) override;
   uint32 pack_length() const override { return sizeof(double); }
   uint row_pack_length() const override { return pack_length(); }
-  void sql_type(String &str) const override;
   ulonglong get_max_int_value() const override
   {
     /*
@@ -4790,6 +4785,7 @@ public:
     max number of characters.
   */
   ulonglong length;
+  uint decimals;
   Field::utype unireg_check;
   const TYPELIB *interval;            // Which interval to use
   CHARSET_INFO *charset;
@@ -4797,6 +4793,7 @@ public:
   uint pack_flag;
   Column_definition_attributes()
    :length(0),
+    decimals(0),
     unireg_check(Field::NONE),
     interval(NULL),
     charset(&my_charset_bin),
@@ -4804,6 +4801,7 @@ public:
     pack_flag(0)
   { }
   Column_definition_attributes(const Field *field);
+  Column_definition_attributes(const Type_all_attributes &attr);
   Field *make_field(TABLE_SHARE *share, MEM_ROOT *mem_root,
                     const Record_addr *rec,
                     const Type_handler *handler,
@@ -4816,8 +4814,12 @@ public:
   uint pack_flag_to_pack_length() const;
   void frm_pack_basic(uchar *buff) const;
   void frm_pack_charset(uchar *buff) const;
+  void frm_pack_numeric_with_dec(uchar *buff) const;
   void frm_unpack_basic(const uchar *buff);
   bool frm_unpack_charset(TABLE_SHARE *share, const uchar *buff);
+  bool frm_unpack_numeric_with_dec(TABLE_SHARE *share, const uchar *buff);
+  bool frm_unpack_temporal_with_dec(TABLE_SHARE *share, uint intlen,
+                                    const uchar *buff);
 };
 
 
@@ -4887,7 +4889,7 @@ public:
     for most of the types, or of bytes for BLOBs or numeric types.
   */
   uint32 char_length;
-  uint  decimals, flags, pack_length;
+  uint  flags, pack_length;
   List<String> interval_list;
   engine_option_value *option_list;
 
@@ -4910,7 +4912,7 @@ public:
    :Type_handler_hybrid_field_type(&type_handler_null),
     compression_method_ptr(0),
     comment(null_clex_str),
-    on_update(NULL), invisible(VISIBLE), char_length(0), decimals(0),
+    on_update(NULL), invisible(VISIBLE), char_length(0),
     flags(0), pack_length(0),
     option_list(NULL),
     vcol_info(0), default_value(0), check_constraint(0),
@@ -5009,7 +5011,7 @@ public:
   bool prepare_stage2_varchar(ulonglong table_flags);
   bool prepare_stage2_typelib(const char *type_name, uint field_flags,
                               uint *dup_val_count);
-  uint pack_flag_numeric(uint dec) const;
+  uint pack_flag_numeric() const;
   uint sign_length() const { return flags & UNSIGNED_FLAG ? 0 : 1; }
   bool check_length(uint mysql_errno, uint max_allowed_length) const;
   bool fix_attributes_real(uint default_length);
@@ -5470,6 +5472,8 @@ bool check_expression(Virtual_column_info *vcol, const LEX_CSTRING *name,
 #define FIELDFLAG_PACK_SHIFT		3
 #define FIELDFLAG_DEC_SHIFT		8
 #define FIELDFLAG_MAX_DEC               63U
+
+#define FIELDFLAG_DEC_MASK              0x3F00U
 
 #define MTYP_TYPENR(type) ((type) & 127U) // Remove bits from type
 

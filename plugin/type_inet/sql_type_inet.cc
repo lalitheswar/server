@@ -1,5 +1,6 @@
 /* Copyright (c) 2011, 2013, Oracle and/or its affiliates. All rights reserved.
    Copyright (c) 2014 MariaDB Foundation
+   Copyright (c) 2019 MariaDB Corporation
 
    This program is free software; you can redistribute it and/or modify
    it under the terms of the GNU General Public License as published by
@@ -14,354 +15,19 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 51 Franklin St, Fifth Floor, Boston, MA 02110-1335  USA */
 
+#define MYSQL_SERVER
 #include "mariadb.h"
-#include "item_inetfunc.h"
-
 #include "my_net.h"
+#include "sql_class.h" // THD, SORT_FIELD_ATTR
+#include "opt_range.h" // SEL_ARG
+#include "sql_type_inet.h"
 
 ///////////////////////////////////////////////////////////////////////////
-
-static const size_t IN_ADDR_SIZE= 4;
-static const size_t IN_ADDR_MAX_CHAR_LENGTH= 15;
-
-static const size_t IN6_ADDR_SIZE= 16;
-static const size_t IN6_ADDR_NUM_WORDS= IN6_ADDR_SIZE / 2;
-
-/**
-  Non-abbreviated syntax is 8 groups, up to 4 digits each,
-  plus 7 delimiters between the groups.
-  Abbreviated syntax is even shorter.
-*/
-static const uint IN6_ADDR_MAX_CHAR_LENGTH= 8 * 4 + 7;
 
 static const char HEX_DIGITS[]= "0123456789abcdef";
 
-///////////////////////////////////////////////////////////////////////////
-
-longlong Item_func_inet_aton::val_int()
-{
-  DBUG_ASSERT(fixed);
-
-  uint byte_result= 0;
-  ulonglong result= 0;                    // We are ready for 64 bit addresses
-  const char *p,* end;
-  char c= '.'; // we mark c to indicate invalid IP in case length is 0
-  int dot_count= 0;
-
-  StringBuffer<36> tmp;
-  String *s= args[0]->val_str_ascii(&tmp);
-
-  if (!s)       // If null value
-    goto err;
-
-  null_value= 0;
-
-  end= (p = s->ptr()) + s->length();
-  while (p < end)
-  {
-    c= *p++;
-    int digit= (int) (c - '0');
-    if (digit >= 0 && digit <= 9)
-    {
-      if ((byte_result= byte_result * 10 + digit) > 255)
-        goto err;                               // Wrong address
-    }
-    else if (c == '.')
-    {
-      dot_count++;
-      result= (result << 8) + (ulonglong) byte_result;
-      byte_result= 0;
-    }
-    else
-      goto err;                                 // Invalid character
-  }
-  if (c != '.')                                 // IP number can't end on '.'
-  {
-    /*
-      Attempt to support short forms of IP-addresses. It's however pretty
-      basic one comparing to the BSD support.
-      Examples:
-        127     -> 0.0.0.127
-        127.255 -> 127.0.0.255
-        127.256 -> NULL (should have been 127.0.1.0)
-        127.2.1 -> 127.2.0.1
-    */
-    switch (dot_count) {
-    case 1: result<<= 8; /* Fall through */
-    case 2: result<<= 8; /* Fall through */
-    }
-    return (result << 8) + (ulonglong) byte_result;
-  }
-
-err:
-  null_value=1;
-  return 0;
-}
-
-
-String* Item_func_inet_ntoa::val_str(String* str)
-{
-  DBUG_ASSERT(fixed);
-
-  ulonglong n= (ulonglong) args[0]->val_int();
-
-  /*
-    We do not know if args[0] is NULL until we have called
-    some val function on it if args[0] is not a constant!
-
-    Also return null if n > 255.255.255.255
-  */
-  if ((null_value= (args[0]->null_value || n > 0xffffffff)))
-    return 0;                                   // Null value
-
-  str->set_charset(collation.collation);
-  str->length(0);
-
-  uchar buf[8];
-  int4store(buf, n);
-
-  /* Now we can assume little endian. */
-
-  char num[4];
-  num[3]= '.';
-
-  for (uchar *p= buf + 4; p-- > buf;)
-  {
-    uint c= *p;
-    uint n1, n2;                                // Try to avoid divisions
-    n1= c / 100;                                // 100 digits
-    c-= n1 * 100;
-    n2= c / 10;                                 // 10 digits
-    c-= n2 * 10;                                // last digit
-    num[0]= (char) n1 + '0';
-    num[1]= (char) n2 + '0';
-    num[2]= (char) c + '0';
-    uint length= (n1 ? 4 : n2 ? 3 : 2);         // Remove pre-zero
-    uint dot_length= (p <= buf) ? 1 : 0;
-    (void) str->append(num + 4 - length, length - dot_length,
-                       &my_charset_latin1);
-  }
-
-  return str;
-}
 
 ///////////////////////////////////////////////////////////////////////////
-
-
-class Inet4
-{
-  char m_buffer[IN_ADDR_SIZE];
-protected:
-  bool ascii_to_ipv4(const char *str, size_t length);
-  bool character_string_to_ipv4(const char *str, size_t str_length,
-                                CHARSET_INFO *cs)
-  {
-    if (cs->state & MY_CS_NONASCII)
-    {
-      char tmp[IN_ADDR_MAX_CHAR_LENGTH];
-      String_copier copier;
-      uint length= copier.well_formed_copy(&my_charset_latin1, tmp, sizeof(tmp),
-                                           cs, str, str_length);
-      return ascii_to_ipv4(tmp, length);
-    }
-    return ascii_to_ipv4(str, str_length);
-  }
-  bool binary_to_ipv4(const char *str, size_t length)
-  {
-    if (length != sizeof(m_buffer))
-      return true;
-    memcpy(m_buffer, str, length);
-    return false;
-  }
-  // Non-initializing constructor
-  Inet4() { }
-public:
-  void to_binary(char *dst, size_t dstsize) const
-  {
-    DBUG_ASSERT(dstsize >= sizeof(m_buffer));
-    memcpy(dst, m_buffer, sizeof(m_buffer));
-  }
-  bool to_binary(String *to) const
-  {
-    return to->copy(m_buffer, sizeof(m_buffer), &my_charset_bin);
-  }
-  size_t to_string(char *dst, size_t dstsize) const;
-  bool to_string(String *to) const
-  {
-    to->set_charset(&my_charset_latin1);
-    if (to->alloc(INET_ADDRSTRLEN))
-      return true;
-    to->length((uint32) to_string((char*) to->ptr(), INET_ADDRSTRLEN));
-    return false;
-  }
-};
-
-
-class Inet4_null: public Inet4, public Null_flag
-{
-public:
-  // Initialize from a text representation
-  Inet4_null(const char *str, size_t length, CHARSET_INFO *cs)
-   :Null_flag(character_string_to_ipv4(str, length, cs))
-  { }
-  Inet4_null(const String &str)
-   :Inet4_null(str.ptr(), str.length(), str.charset())
-  { }
-  // Initialize from a binary representation
-  Inet4_null(const char *str, size_t length)
-   :Null_flag(binary_to_ipv4(str, length))
-  { }
-  Inet4_null(const Binary_string &str)
-   :Inet4_null(str.ptr(), str.length())
-  { }
-public:
-  const Inet4& to_inet4() const
-  {
-    DBUG_ASSERT(!is_null());
-    return *this;
-  }
-  void to_binary(char *dst, size_t dstsize) const
-  {
-    to_inet4().to_binary(dst, dstsize);
-  }
-  bool to_binary(String *to) const
-  {
-    return to_inet4().to_binary(to);
-  }
-  size_t to_string(char *dst, size_t dstsize) const
-  {
-    return to_inet4().to_string(dst, dstsize);
-  }
-  bool to_string(String *to) const
-  {
-    return to_inet4().to_string(to);
-  }
-};
-
-
-class Inet6
-{
-  char m_buffer[IN6_ADDR_SIZE];
-protected:
-  bool make_from_item(Item *item);
-  bool ascii_to_ipv6(const char *str, size_t str_length);
-  bool character_string_to_ipv6(const char *str, size_t str_length,
-                                CHARSET_INFO *cs)
-  {
-    if (cs->state & MY_CS_NONASCII)
-    {
-      char tmp[IN6_ADDR_MAX_CHAR_LENGTH];
-      String_copier copier;
-      uint length= copier.well_formed_copy(&my_charset_latin1, tmp, sizeof(tmp),
-                                           cs, str, str_length);
-      return ascii_to_ipv6(tmp, length);
-    }
-    return ascii_to_ipv6(str, str_length);
-  }
-  bool binary_to_ipv6(const char *str, size_t length)
-  {
-    if (length != sizeof(m_buffer))
-      return true;
-    memcpy(m_buffer, str, length);
-    return false;
-  }
-  // Non-initializing constructor
-  Inet6() { }
-public:
-  bool to_binary(String *to) const
-  {
-    return to->copy(m_buffer, sizeof(m_buffer), &my_charset_bin);
-  }
-  size_t to_string(char *dst, size_t dstsize) const;
-  bool to_string(String *to) const
-  {
-    to->set_charset(&my_charset_latin1);
-    if (to->alloc(INET6_ADDRSTRLEN))
-      return true;
-    to->length((uint32) to_string((char*) to->ptr(), INET6_ADDRSTRLEN));
-    return false;
-  }
-  bool is_v4compat() const
-  {
-    static_assert(sizeof(in6_addr) == IN6_ADDR_SIZE, "unexpected in6_addr size");
-    return IN6_IS_ADDR_V4COMPAT((struct in6_addr *) m_buffer);
-  }
-  bool is_v4mapped() const
-  {
-    static_assert(sizeof(in6_addr) == IN6_ADDR_SIZE, "unexpected in6_addr size");
-    return IN6_IS_ADDR_V4MAPPED((struct in6_addr *) m_buffer);
-  }
-};
-
-
-class Inet6_null: public Inet6, public Null_flag
-{
-public:
-  // Initialize from a text representation
-  Inet6_null(const char *str, size_t length, CHARSET_INFO *cs)
-   :Null_flag(character_string_to_ipv6(str, length, cs))
-  { }
-  Inet6_null(const String &str)
-   :Inet6_null(str.ptr(), str.length(), str.charset())
-  { }
-  // Initialize from a binary representation
-  Inet6_null(const char *str, size_t length)
-   :Null_flag(binary_to_ipv6(str, length))
-  { }
-  Inet6_null(const Binary_string &str)
-   :Inet6_null(str.ptr(), str.length())
-  { }
-  // Initialize from an Item
-  Inet6_null(Item *item)
-   :Null_flag(make_from_item(item))
-  { }
-public:
-  const Inet6& to_inet6() const
-  {
-    DBUG_ASSERT(!is_null());
-    return *this;
-  }
-  bool to_binary(String *to) const
-  {
-    DBUG_ASSERT(!is_null());
-    return to_inet6().to_binary(to);
-  }
-  size_t to_string(char *dst, size_t dstsize) const
-  {
-    return to_inet6().to_string(dst, dstsize);
-  }
-  bool to_string(String *to) const
-  {
-    return to_inet6().to_string(to);
-  }
-  bool is_v4compat() const
-  {
-    return to_inet6().is_v4compat();
-  }
-  bool is_v4mapped() const
-  {
-    return to_inet6().is_v4mapped();
-  }
-};
-
-
-bool Inet6::make_from_item(Item *item)
-{
-  String tmp(m_buffer, sizeof(m_buffer), &my_charset_bin);
-  String *str= item->val_str(&tmp);
-  /*
-    Charset could be tested in item->collation.collation before the val_str()
-    call, but traditionally Inet6 functions still call item->val_str()
-    for non-binary arguments and therefore execute side effects.
-  */
-  if (!str || str->length() != sizeof(m_buffer) ||
-      str->charset() != &my_charset_bin)
-    return true;
-  if (str->ptr() != m_buffer)
-      memcpy(m_buffer, str->ptr(), sizeof(m_buffer));
-  return false;
-};
-
 
 /**
   Tries to convert given string to binary IPv4-address representation.
@@ -841,127 +507,36 @@ size_t Inet6::to_string(char *dst, size_t dstsize) const
   return (size_t) (p - dst);
 }
 
-///////////////////////////////////////////////////////////////////////////
 
-/**
-  Converts IP-address-string to IP-address-data.
-
-    ipv4-string -> varbinary(4)
-    ipv6-string -> varbinary(16)
-
-  @return Completion status.
-  @retval NULL  Given string does not represent an IP-address.
-  @retval !NULL The string has been converted sucessfully.
-*/
-
-String *Item_func_inet6_aton::val_str(String *buffer)
+bool Inet6::make_from_item(Item *item)
 {
-  DBUG_ASSERT(fixed);
+  StringBufferInet6 tmp;
+  String *str= item->val_str(&tmp);
+  return str ? make_from_character_or_binary_string(str) : true;
+}
 
-  Ascii_ptr_and_buffer<STRING_BUFFER_USUAL_SIZE> tmp(args[0]);
-  if ((null_value= tmp.is_null()))
-    return NULL;
 
-  Inet4_null ipv4(*tmp.string());
-  if (!ipv4.is_null())
+bool Inet6::make_from_character_or_binary_string(const String *str)
+{
+  static Name name= Name(STRING_WITH_LEN("inet6"));
+  if (str->charset() != &my_charset_bin)
   {
-    ipv4.to_binary(buffer);
-    return buffer;
+    bool rc= character_string_to_ipv6(str->ptr(), str->length(),
+                                      str->charset());
+    if (rc)
+      current_thd->push_warning_wrong_value(Sql_condition::WARN_LEVEL_WARN,
+                                            name.ptr(),
+                                            ErrConvString(str).ptr());
+    return rc;
   }
-
-  Inet6_null ipv6(*tmp.string());
-  if (!ipv6.is_null())
+  if (str->length() != sizeof(m_buffer))
   {
-    ipv6.to_binary(buffer);
-    return buffer;
+    current_thd->push_warning_wrong_value(Sql_condition::WARN_LEVEL_WARN,
+                                          name.ptr(),
+                                          ErrConvString(str).ptr());
+    return true;
   }
-
-  null_value= true;
-  return NULL;
-}
-
-
-/**
-  Converts IP-address-data to IP-address-string.
-*/
-
-String *Item_func_inet6_ntoa::val_str_ascii(String *buffer)
-{
-  DBUG_ASSERT(fixed);
-
-  // Binary string argument expected
-  if (unlikely(args[0]->result_type() != STRING_RESULT ||
-               args[0]->collation.collation != &my_charset_bin))
-  {
-    null_value= true;
-    return NULL;
-  }
-
-  String_ptr_and_buffer<STRING_BUFFER_USUAL_SIZE> tmp(args[0]);
-  if ((null_value= tmp.is_null()))
-    return NULL;
-
-  Inet4_null ipv4(static_cast<const Binary_string&>(*tmp.string()));
-  if (!ipv4.is_null())
-  {
-    ipv4.to_string(buffer);
-    return buffer;
-  }
-
-  Inet6_null ipv6(static_cast<const Binary_string&>(*tmp.string()));
-  if (!ipv6.is_null())
-  {
-    ipv6.to_string(buffer);
-    return buffer;
-  }
-
-  DBUG_PRINT("info", ("INET6_NTOA(): varbinary(4) or varbinary(16) expected."));
-  null_value= true;
-  return NULL;
-}
-
-
-/**
-  Checks if the passed string represents an IPv4-address.
-*/
-
-longlong Item_func_is_ipv4::val_int()
-{
-  DBUG_ASSERT(fixed);
-  String_ptr_and_buffer<STRING_BUFFER_USUAL_SIZE> tmp(args[0]);
-  return !tmp.is_null() && !Inet4_null(*tmp.string()).is_null();
-}
-
-
-/**
-  Checks if the passed string represents an IPv6-address.
-*/
-
-longlong Item_func_is_ipv6::val_int()
-{
-  DBUG_ASSERT(fixed);
-  String_ptr_and_buffer<STRING_BUFFER_USUAL_SIZE> tmp(args[0]);
-  return !tmp.is_null() && !Inet6_null(*tmp.string()).is_null();
-}
-
-
-/**
-  Checks if the passed IPv6-address is an IPv4-compat IPv6-address.
-*/
-
-longlong Item_func_is_ipv4_compat::val_int()
-{
-  Inet6_null ip6(args[0]);
-  return !ip6.is_null() && ip6.is_v4compat();
-}
-
-
-/**
-  Checks if the passed IPv6-address is an IPv4-mapped IPv6-address.
-*/
-
-longlong Item_func_is_ipv4_mapped::val_int()
-{
-  Inet6_null ip6(args[0]);
-  return !ip6.is_null() && ip6.is_v4mapped();
-}
+  DBUG_ASSERT(str->ptr() != m_buffer);
+  memcpy(m_buffer, str->ptr(), sizeof(m_buffer));
+  return false;
+};

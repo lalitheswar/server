@@ -945,7 +945,7 @@ bool is_native_function(THD *thd, const LEX_CSTRING *name)
   if (is_lex_native_function(name))
     return true;
 
-  if (Type_handler::handler_by_name(*name))
+  if (Type_handler::handler_by_name(thd, *name))
     return true;
 
   return false;
@@ -9132,9 +9132,8 @@ SELECT_LEX_UNIT *LEX::parsed_select_expr_cont(SELECT_LEX_UNIT *unit,
                                               enum sub_select_type unit_type,
                                               bool distinct, bool oracle)
 {
-  SELECT_LEX *sel1;
-  if (!s2->next_select())
-    sel1= s2;
+  DBUG_ASSERT(!s2->next_select());
+  SELECT_LEX *sel1= s2;
   SELECT_LEX *last= unit->pre_last_parse->next_select();
 
   int cmp= oracle? 0 : cmp_unit_op(unit_type, last->get_linkage());
@@ -10433,3 +10432,29 @@ void Lex_field_type_st::set_handler_length_flags(const Type_handler *handler,
     handler= handler->type_handler_unsigned();
   set(handler, length, NULL);
 }
+
+
+bool LEX::set_field_type_udt(Lex_field_type_st *type,
+                             const LEX_CSTRING &name,
+                             const Lex_length_and_dec_st &attr)
+{
+  const Type_handler *h;
+  if (!(h= Type_handler::handler_by_name_or_error(thd, name)))
+    return true;
+  type->set(h, attr);
+  charset= &my_charset_bin;
+  return false;
+}
+
+
+bool LEX::set_cast_type_udt(Lex_cast_type_st *type,
+                             const LEX_CSTRING &name)
+{
+  const Type_handler *h;
+  if (!(h= Type_handler::handler_by_name_or_error(thd, name)))
+    return true;
+  type->set(h);
+  charset= NULL;
+  return false;
+}
+

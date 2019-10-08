@@ -967,6 +967,38 @@ void Column_definition_attributes::frm_unpack_basic(const uchar *buff)
 }
 
 
+void Column_definition_attributes::frm_pack_numeric_with_dec(uchar *buff) const
+{
+  DBUG_ASSERT(f_decimals(pack_flag) == 0);
+  uint tmp_pack_flag= pack_flag | (decimals << FIELDFLAG_DEC_SHIFT);
+  int2store(buff + 3, length);
+  int2store(buff + 8, tmp_pack_flag);
+  buff[10]= (uchar) unireg_check;
+}
+
+
+bool
+Column_definition_attributes::frm_unpack_numeric_with_dec(TABLE_SHARE *share,
+                                                          const uchar *buff)
+{
+  frm_unpack_basic(buff);
+  decimals= f_decimals(pack_flag);
+  pack_flag&= ~FIELDFLAG_DEC_MASK;
+  return frm_unpack_charset(share, buff);
+}
+
+
+bool
+Column_definition_attributes::frm_unpack_temporal_with_dec(TABLE_SHARE *share,
+                                                           uint intlen,
+                                                           const uchar *buff)
+{
+  frm_unpack_basic(buff);
+  decimals= temporal_dec(intlen);
+  return frm_unpack_charset(share, buff);
+}
+
+
 void Column_definition_attributes::frm_pack_charset(uchar *buff) const
 {
   buff[11]= (uchar) (charset->number >> 8);
@@ -1152,12 +1184,21 @@ bool parse_vcol_defs(THD *thd, MEM_ROOT *mem_root, TABLE *table,
       vcol= unpack_vcol_info_from_frm(thd, mem_root, table, &expr_str,
                                     &((*field_ptr)->vcol_info), error_reported);
       *(vfield_ptr++)= *field_ptr;
+      DBUG_ASSERT(table->map == 0);
+      /*
+        We need Item_field::const_item() to return false, so
+        datetime_precision() and time_precision() do not try to calculate
+        field values, e.g. val_str().
+        Set table->map to non-zero temporarily.
+      */
+      table->map= 1;
       if (vcol && field_ptr[0]->check_vcol_sql_mode_dependency(thd, mode))
       {
         DBUG_ASSERT(thd->is_error());
         *error_reported= true;
         goto end;
       }
+      table->map= 0;
       break;
     case VCOL_DEFAULT:
       vcol= unpack_vcol_info_from_frm(thd, mem_root, table, &expr_str,
@@ -1591,7 +1632,7 @@ public:
   {
     return m_count;
   }
-  const Elem element(uint i) const
+  const Elem& element(uint i) const
   {
     DBUG_ASSERT(i < m_count);
     return m_array[i];
@@ -2299,12 +2340,32 @@ int TABLE_SHARE::init_from_binary_frm_image(THD *thd, bool write,
 
         if (field_data_type_info_array.count())
         {
+          const LEX_CSTRING &info= field_data_type_info_array.
+                                     element(i).type_info();
           DBUG_EXECUTE_IF("frm_data_type_info",
             push_warning_printf(thd, Sql_condition::WARN_LEVEL_NOTE,
             ER_UNKNOWN_ERROR, "DBUG: [%u] name='%s' type_info='%.*s'",
             i, share->fieldnames.type_names[i],
-            (uint) field_data_type_info_array.element(i).type_info().length,
-            field_data_type_info_array.element(i).type_info().str););
+            (uint) info.length, info.str););
+
+          if (info.length)
+          {
+            const Type_handler *h= Type_handler::handler_by_name_or_error(thd,
+                                                                          info);
+            /*
+              This code will eventually be extended here:
+              - If the handler was not found by name, we could
+                still open the table using the fallback type handler "handler",
+                at least for a limited set of commands.
+              - If the handler was found by name, we could check
+                that "h" and "handler" have the same type code
+                (and maybe some other properties) to make sure
+                that the FRM data is consistent.
+            */
+            if (!h)
+              goto err;
+            handler= h;
+          }
         }
       }
 
@@ -2337,6 +2398,11 @@ int TABLE_SHARE::init_from_binary_frm_image(THD *thd, bool write,
       attr.length= (uint) strpos[3];
       recpos=	    uint2korr(strpos+4),
       attr.pack_flag=    uint2korr(strpos+6);
+      if (f_is_num(attr.pack_flag))
+      {
+        attr.decimals= f_decimals(attr.pack_flag);
+        attr.pack_flag&= ~FIELDFLAG_DEC_MASK;
+      }
       attr.pack_flag&=   ~FIELDFLAG_NO_DEFAULT;     // Safety for old files
       attr.unireg_check=  (Field::utype) MTYP_TYPENR((uint) strpos[8]);
       interval_nr=  (uint) strpos[10];
@@ -9540,12 +9606,12 @@ bool TR_table::check(bool error)
   return false;
 }
 
-bool vers_select_conds_t::resolve_units(THD *thd)
+bool vers_select_conds_t::check_units(THD *thd)
 {
   DBUG_ASSERT(type != SYSTEM_TIME_UNSPECIFIED);
   DBUG_ASSERT(start.item);
-  return start.resolve_unit(thd) ||
-         end.resolve_unit(thd);
+  return start.check_unit(thd) ||
+         end.check_unit(thd);
 }
 
 bool vers_select_conds_t::eq(const vers_select_conds_t &conds) const
@@ -9569,22 +9635,21 @@ bool vers_select_conds_t::eq(const vers_select_conds_t &conds) const
 }
 
 
-bool Vers_history_point::resolve_unit(THD *thd)
+bool Vers_history_point::check_unit(THD *thd)
 {
   if (!item)
     return false;
   if (item->fix_fields_if_needed(thd, &item))
     return true;
-  return item->this_item()->real_type_handler()->
-           type_handler_for_system_time()->
-           Vers_history_point_resolve_unit(thd, this);
-}
-
-
-void Vers_history_point::bad_expression_data_type_error(const char *type) const
-{
-  my_error(ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION, MYF(0),
-           type, "FOR SYSTEM_TIME");
+  const Type_handler *t= item->this_item()->real_type_handler();
+  DBUG_ASSERT(t);
+  if (!t->vers())
+  {
+    my_error(ER_ILLEGAL_PARAMETER_DATA_TYPE_FOR_OPERATION, MYF(0),
+             t->name().ptr(), "FOR SYSTEM_TIME");
+    return true;
+  }
+  return false;
 }
 
 

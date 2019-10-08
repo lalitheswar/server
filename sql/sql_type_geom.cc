@@ -147,49 +147,94 @@ Type_handler_geometry::type_handler_frm_unpack(const uchar *buffer) const
 }
 
 
+const Type_handler *
+Type_collection_geometry::aggregate_for_comparison(const Type_handler *a,
+                                                   const Type_handler *b)
+                                                   const
+{
+  const Type_handler *h;
+  if ((h= aggregate_common(a, b)) ||
+      (h= aggregate_if_null(a, b)) ||
+      (h= aggregate_if_long_blob(a, b)))
+    return h;
+  return NULL;
+}
+
+
+const Type_handler *
+Type_collection_geometry::aggregate_for_result(const Type_handler *a,
+                                               const Type_handler *b)
+                                               const
+{
+  const Type_handler *h;
+  if ((h= aggregate_common(a, b)) ||
+      (h= aggregate_if_null(a, b)) ||
+      (h= aggregate_if_long_blob(a, b)) ||
+      (h= aggregate_if_string(a, b)))
+    return h;
+  return NULL;
+}
+
+
+const Type_handler *
+Type_collection_geometry::aggregate_for_min_max(const Type_handler *a,
+                                                const Type_handler *b)
+                                                const
+{
+  const Type_handler *h;
+  if ((h= aggregate_common(a, b)) ||
+      (h= aggregate_if_null(a, b)) ||
+      (h= aggregate_if_long_blob(a, b)) ||
+      (h= aggregate_if_string(a, b)))
+    return h;
+  return NULL;
+}
+
+
+const Type_handler *
+Type_collection_geometry::aggregate_if_string(const Type_handler *a,
+                                              const Type_handler *b) const
+{
+  if (a->type_collection() == this)
+  {
+    DBUG_ASSERT(b->type_collection() != this);
+    swap_variables(const Type_handler *, a, b);
+  }
+  if (a == &type_handler_hex_hybrid ||
+      a == &type_handler_tiny_blob ||
+      a == &type_handler_blob ||
+      a == &type_handler_medium_blob ||
+      a == &type_handler_varchar ||
+      a == &type_handler_string)
+    return &type_handler_long_blob;
+  return NULL;
+}
+
+
+#ifndef DBUG_OFF
 bool Type_collection_geometry::init_aggregators(Type_handler_data *data,
                                                 const Type_handler *geom) const
 {
   Type_aggregator *r= &data->m_type_aggregator_for_result;
-  Type_aggregator *c= &data->m_type_aggregator_for_comparison;
   return
-    r->add(geom, &type_handler_null,        geom) ||
     r->add(geom, &type_handler_hex_hybrid,  &type_handler_long_blob) ||
     r->add(geom, &type_handler_tiny_blob,   &type_handler_long_blob) ||
     r->add(geom, &type_handler_blob,        &type_handler_long_blob) ||
     r->add(geom, &type_handler_medium_blob, &type_handler_long_blob) ||
-    r->add(geom, &type_handler_long_blob,   &type_handler_long_blob) ||
     r->add(geom, &type_handler_varchar,     &type_handler_long_blob) ||
-    r->add(geom, &type_handler_string,      &type_handler_long_blob) ||
-    c->add(geom, &type_handler_null,        geom) ||
-    c->add(geom, &type_handler_long_blob,   &type_handler_long_blob);
+    r->add(geom, &type_handler_string,      &type_handler_long_blob);
 }
+#endif
 
 
 bool Type_collection_geometry::init(Type_handler_data *data)
 {
 #ifndef DBUG_OFF
-  /*
-    The rules (geometry,geometry)->geometry and (pont,point)->geometry
-    are needed here to make sure
-    (in gis-debug.test) that they do not affect anything, and these pairs
-    returns an error in an expression like (POINT(0,0)+POINT(0,0)).
-    Both sides are from the same type collection here,
-    so aggregation goes only through Type_collection_xxx::aggregate_yyy()
-    and never reaches Type_aggregator::find_handler().
-  */
   Type_aggregator *nct= &data->m_type_aggregator_non_commutative_test;
-  if (nct->add(&type_handler_geometry,
-               &type_handler_geometry,
-               &type_handler_geometry) ||
-      nct->add(&type_handler_point,
-               &type_handler_point,
-               &type_handler_geometry) ||
-      nct->add(&type_handler_point,
+  if (nct->add(&type_handler_point,
                &type_handler_varchar,
                &type_handler_long_blob))
-  return true;
-#endif // DBUG_OFF
+    return true;
   return
     init_aggregators(data, &type_handler_geometry) ||
     init_aggregators(data, &type_handler_geometrycollection) ||
@@ -199,6 +244,8 @@ bool Type_collection_geometry::init(Type_handler_data *data)
     init_aggregators(data, &type_handler_multipoint) ||
     init_aggregators(data, &type_handler_multilinestring) ||
     init_aggregators(data, &type_handler_multipolygon);
+#endif // DBUG_OFF
+  return false;
 }
 
 
@@ -475,11 +522,11 @@ Field *Type_handler_geometry::make_table_field(MEM_ROOT *root,
                                                const LEX_CSTRING *name,
                                                const Record_addr &addr,
                                                const Type_all_attributes &attr,
-                                               TABLE *table) const
+                                               TABLE_SHARE *share) const
 {
   return new (root)
          Field_geom(addr.ptr(), addr.null_ptr(), addr.null_bit(),
-                    Field::NONE, name, table->s, 4, this, 0);
+                    Field::NONE, name, share, 4, this, 0);
 }
 
 
@@ -659,6 +706,7 @@ void Type_handler_geometry::
   Column_definition_attributes_frm_pack(const Column_definition_attributes *def,
                                         uchar *buff) const
 {
+  DBUG_ASSERT(f_decimals(def->pack_flag & ~FIELDFLAG_GEOM) == 0);
   def->frm_pack_basic(buff);
   buff[11]= 0;
   buff[14]= (uchar) geometry_type();

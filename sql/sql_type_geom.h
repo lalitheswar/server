@@ -78,6 +78,12 @@ public:
   uint Column_definition_gis_options_image(uchar *buff,
                                            const Column_definition &def)
                                            const override;
+  bool Column_definition_data_type_info_image(Binary_string *to,
+                                              const Column_definition &def)
+                                              const override
+  {
+    return false;
+  }
   void
   Column_definition_attributes_frm_pack(const Column_definition_attributes *at,
                                         uchar *buff) const override;
@@ -119,7 +125,7 @@ public:
                           const LEX_CSTRING *name,
                           const Record_addr &addr,
                           const Type_all_attributes &attr,
-                          TABLE *table) const override;
+                          TABLE_SHARE *share) const override;
 
   Field *make_table_field_from_def(TABLE_SHARE *share,
                                    MEM_ROOT *mem_root,
@@ -257,17 +263,6 @@ extern MYSQL_PLUGIN_IMPORT Type_handler_multipolygon    type_handler_multipolygo
 extern MYSQL_PLUGIN_IMPORT Type_handler_geometrycollection type_handler_geometrycollection;
 
 
-class Function_collection_geometry: public Function_collection
-{
-public:
-  bool init() override;
-  void cleanup() override;
-  Create_func *find_native_function_builder(THD *thd,
-                                            const LEX_CSTRING &name)
-                                            const override;
-};
-
-
 class Type_collection_geometry: public Type_collection
 {
   const Type_handler *aggregate_common(const Type_handler *a,
@@ -275,32 +270,42 @@ class Type_collection_geometry: public Type_collection
   {
     if (a == b)
       return a;
-    DBUG_ASSERT(dynamic_cast<const Type_handler_geometry*>(a));
-    DBUG_ASSERT(dynamic_cast<const Type_handler_geometry*>(b));
-    return &type_handler_geometry;
+    if (dynamic_cast<const Type_handler_geometry*>(a) &&
+        dynamic_cast<const Type_handler_geometry*>(b))
+      return &type_handler_geometry;
+    return NULL;
   }
+  const Type_handler *aggregate_if_null(const Type_handler *a,
+                                        const Type_handler *b) const
+  {
+    return a == &type_handler_null ? b :
+           b == &type_handler_null ? a :
+           NULL;
+  }
+  const Type_handler *aggregate_if_long_blob(const Type_handler *a,
+                                             const Type_handler *b) const
+  {
+    return a == &type_handler_long_blob ? &type_handler_long_blob :
+           b == &type_handler_long_blob ? &type_handler_long_blob :
+           NULL;
+  }
+  const Type_handler *aggregate_if_string(const Type_handler *a,
+                                          const Type_handler *b) const;
+#ifndef DBUG_OFF
   bool init_aggregators(Type_handler_data *data, const Type_handler *geom) const;
+#endif
 public:
   bool init(Type_handler_data *data) override;
   const Type_handler *handler_by_name(const LEX_CSTRING &name) const override;
   const Type_handler *aggregate_for_result(const Type_handler *a,
                                            const Type_handler *b)
-                                           const override
-  {
-    return aggregate_common(a, b);
-  }
+                                           const override;
   const Type_handler *aggregate_for_comparison(const Type_handler *a,
                                                const Type_handler *b)
-                                               const override
-  {
-    return aggregate_common(a, b);
-  }
+                                               const override;
   const Type_handler *aggregate_for_min_max(const Type_handler *a,
                                             const Type_handler *b)
-                                            const override
-  {
-    return aggregate_common(a, b);
-  }
+                                            const override;
   const Type_handler *aggregate_for_num_op(const Type_handler *a,
                                            const Type_handler *b)
                                            const override
@@ -309,9 +314,6 @@ public:
   }
 };
 
-
-extern MYSQL_PLUGIN_IMPORT
-  Function_collection_geometry function_collection_geometry;
 
 extern MYSQL_PLUGIN_IMPORT Type_collection_geometry type_collection_geometry;
 
