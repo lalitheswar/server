@@ -25,7 +25,7 @@ my_regex is used on Windows and native calls are used on POSIX platforms. */
 #ifdef HAVE_SYSTEM_REGEX
 #include <regex.h>
 #else
-#include <pcreposix.h>
+#include <pcre2posix.h>
 #endif
 
 typedef regex_t* xb_regex_t;
