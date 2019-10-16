@@ -206,6 +206,8 @@ my @DEFAULT_SUITES= qw(
     vcol-
     versioning-
     period-
+    galera-
+    galera_sr-
   );
 my $opt_suites;
 
