@@ -5926,12 +5926,46 @@ initialize_auto_increment(dict_table_t* table, const Field* field)
 	mutex_exit(&table->autoinc_mutex);
 }
 
-static void
-get_foreign_key_info2(
-	/*=================*/
-	FOREIGN_KEY_INFO&, THD* thd, /*!< in: user thread handle */
-	TABLE_SHARE*	s,
-	dict_foreign_t* foreign); /*!< in: foreign key constraint */
+static FOREIGN_KEY_INFO*
+get_foreign_key_info(THD* thd, TABLE_SHARE* s, dict_foreign_t* foreign);
+
+List<FOREIGN_KEY_INFO>*
+ha_innobase::build_foreign_list(THD* thd, dict_foreign_set& foreign_set,
+				bool& err) const
+{
+	List<FOREIGN_KEY_INFO>* result_list
+		= (List<FOREIGN_KEY_INFO>*)alloc_root(
+			&table->s->mem_root, sizeof(List<FOREIGN_KEY_INFO>));
+	if (unlikely(!result_list)) {
+		err = true;
+		return NULL;
+	}
+	result_list->empty();
+
+	m_prebuilt->trx->op_info = "getting list of foreign keys";
+	mutex_enter(&dict_sys.mutex);
+
+	for (dict_foreign_set::iterator it = foreign_set.begin();
+	     it != foreign_set.end(); ++it) {
+
+		FOREIGN_KEY_INFO* key_info
+			= get_foreign_key_info(thd, table->s, *it);
+
+		if (!key_info) {
+			err = true;
+			break;
+		}
+
+		err = result_list->push_back(key_info, &table->s->mem_root);
+		if (err)
+			break;
+	}
+
+	mutex_exit(&dict_sys.mutex);
+	m_prebuilt->trx->op_info = "";
+
+	return result_list;
+}
 
 /** Open an InnoDB table
 @param[in]	name	table name
@@ -6209,73 +6243,38 @@ no_such_table:
 
 	info(HA_STATUS_NO_LOCK | HA_STATUS_VARIABLE | HA_STATUS_CONST | HA_STATUS_OPEN);
 
-	if (!table->s->foreign_keys && table->s->tmp_table == NO_TMP_TABLE) {
+	if (!table->s->referenced_keys
+	    && table->s->tmp_table == NO_TMP_TABLE) {
+		bool err = false;
 		mysql_mutex_lock(&table->s->LOCK_share);
-		if (!table->s->foreign_keys) {
-			table->s->foreign_keys
-				= (List<FOREIGN_KEY_INFO>*)alloc_root(
-					&table->s->mem_root,
-					sizeof(List<FOREIGN_KEY_INFO>));
-			if (unlikely(!table->s->foreign_keys)) {
-				mysql_mutex_unlock(&table->s->LOCK_share);
-				MYSQL_UNBIND_TABLE(table->file);
-				tc_release_table(table);
-				my_error(ER_OUT_OF_RESOURCES, MYF(0));
-				DBUG_RETURN(true);
+		if (!table->s->referenced_keys) {
+			DBUG_ASSERT(!table->s->foreign_keys);
+			if (!m_prebuilt->table->foreign_set.empty()) {
+				table->s->foreign_keys = build_foreign_list(
+					thd, m_prebuilt->table->foreign_set,
+					err);
 			}
-			table->s->foreign_keys->empty();
-			List<FOREIGN_KEY_INFO> f_key_list;
-			bool		       err = false;
-
-			m_prebuilt->trx->op_info
-				= "getting list of foreign keys";
-
-			mutex_enter(&dict_sys.mutex);
-
-			for (dict_foreign_set::iterator it
-			     = m_prebuilt->table->foreign_set.begin();
-			     it != m_prebuilt->table->foreign_set.end();
-			     ++it) {
-
-				FOREIGN_KEY_INFO* pf_key_info
-					= (FOREIGN_KEY_INFO*)alloc_root(
-						&table->s->mem_root,
-						sizeof(FOREIGN_KEY_INFO));
-				if (!pf_key_info) {
-					err = true;
-					break;
-				}
-				pf_key_info->foreign_fields.empty();
-				pf_key_info->referenced_fields.empty();
-				dict_foreign_t* foreign = *it;
-
-				get_foreign_key_info2(*pf_key_info, thd,
-						      table->s, foreign);
-
-				f_key_list.push_back(pf_key_info);
+			if (!err
+			    && !m_prebuilt->table->referenced_set.empty()) {
+				table->s->referenced_keys = build_foreign_list(
+					thd, m_prebuilt->table->referenced_set,
+					err);
 			}
-
-			mutex_exit(&dict_sys.mutex);
-
-			m_prebuilt->trx->op_info = "";
-
-			if (unlikely(err)) {
-				mysql_mutex_unlock(&table->s->LOCK_share);
-				MYSQL_UNBIND_TABLE(table->file);
-				tc_release_table(table);
-				DBUG_RETURN(true);
-			}
-			if (unlikely(table->s->foreign_keys->copy(
-				    &f_key_list, &table->s->mem_root))) {
-				mysql_mutex_unlock(&table->s->LOCK_share);
-				MYSQL_UNBIND_TABLE(table->file);
-				tc_release_table(table);
-				my_error(ER_OUT_OF_RESOURCES, MYF(0));
-				DBUG_RETURN(true);
+			if (!table->s->referenced_keys) {
+				/* Assign some empty list to indicate that we
+				don't need to initialize this TABLE_SHARE
+				anymore. */
+				static List<FOREIGN_KEY_INFO> empty_list;
+				DBUG_ASSERT(empty_list.is_empty());
+				table->s->referenced_keys = &empty_list;
 			}
 		}
 		mysql_mutex_unlock(&table->s->LOCK_share);
-		DBUG_ASSERT(table->s->foreign_keys);
+		if (unlikely(err)) {
+			set_my_errno(ENOMEM);
+			DBUG_RETURN(HA_ERR_OUT_OF_MEM);
+		}
+		DBUG_ASSERT(table->s->referenced_keys);
 	}
 
 	DBUG_RETURN(0);
@@ -15274,147 +15273,10 @@ ha_innobase::get_foreign_key_create_info(void)
 /***********************************************************************//**
 Maps a InnoDB foreign key constraint to a equivalent MySQL foreign key info.
 @return pointer to foreign key info */
-static
-FOREIGN_KEY_INFO*
+static FOREIGN_KEY_INFO*
 get_foreign_key_info(
-/*=================*/
-	THD*			thd,	/*!< in: user thread handle */
-	dict_foreign_t*		foreign)/*!< in: foreign key constraint */
-{
-	FOREIGN_KEY_INFO	f_key_info;
-	FOREIGN_KEY_INFO*	pf_key_info;
-	uint			i = 0;
-	size_t			len;
-	char			tmp_buff[NAME_LEN+1];
-	char			name_buff[NAME_LEN+1];
-	const char*		ptr;
-	LEX_CSTRING*		referenced_key_name;
-	LEX_CSTRING*		name = NULL;
-
-	if (dict_table_t::is_temporary_name(foreign->foreign_table_name)) {
-		return NULL;
-	}
-
-	ptr = dict_remove_db_name(foreign->id);
-	f_key_info.foreign_id = thd_make_lex_string(
-		thd, 0, ptr, strlen(ptr), 1);
-
-	/* Name format: database name, '/', table name, '\0' */
-
-	/* Referenced (parent) database name */
-	len = dict_get_db_name_len(foreign->referenced_table_name);
-	ut_a(len < sizeof(tmp_buff));
-	ut_memcpy(tmp_buff, foreign->referenced_table_name, len);
-	tmp_buff[len] = 0;
-
-	len = filename_to_tablename(tmp_buff, name_buff, sizeof(name_buff));
-	f_key_info.referenced_db = thd_make_lex_string(
-		thd, 0, name_buff, len, 1);
-
-	/* Referenced (parent) table name */
-	ptr = dict_remove_db_name(foreign->referenced_table_name);
-	len = filename_to_tablename(ptr, name_buff, sizeof(name_buff), 1);
-	f_key_info.referenced_table = thd_make_lex_string(
-		thd, 0, name_buff, len, 1);
-
-	/* Dependent (child) database name */
-	len = dict_get_db_name_len(foreign->foreign_table_name);
-	ut_a(len < sizeof(tmp_buff));
-	ut_memcpy(tmp_buff, foreign->foreign_table_name, len);
-	tmp_buff[len] = 0;
-
-	len = filename_to_tablename(tmp_buff, name_buff, sizeof(name_buff));
-	f_key_info.foreign_db = thd_make_lex_string(
-		thd, 0, name_buff, len, 1);
-
-	/* Dependent (child) table name */
-	ptr = dict_remove_db_name(foreign->foreign_table_name);
-	len = filename_to_tablename(ptr, name_buff, sizeof(name_buff), 1);
-	f_key_info.foreign_table = thd_make_lex_string(
-		thd, 0, name_buff, len, 1);
-
-	do {
-		ptr = foreign->foreign_col_names[i];
-		name = thd_make_lex_string(thd, name, ptr,
-					   strlen(ptr), 1);
-		f_key_info.foreign_fields.push_back(name);
-		ptr = foreign->referenced_col_names[i];
-		name = thd_make_lex_string(thd, name, ptr,
-					   strlen(ptr), 1);
-		f_key_info.referenced_fields.push_back(name);
-	} while (++i < foreign->n_fields);
-
-	if (foreign->type & DICT_FOREIGN_ON_DELETE_CASCADE) {
-		f_key_info.delete_method = FK_OPTION_CASCADE;
-	} else if (foreign->type & DICT_FOREIGN_ON_DELETE_SET_NULL) {
-		f_key_info.delete_method = FK_OPTION_SET_NULL;
-	} else if (foreign->type & DICT_FOREIGN_ON_DELETE_NO_ACTION) {
-		f_key_info.delete_method = FK_OPTION_NO_ACTION;
-	} else {
-		f_key_info.delete_method = FK_OPTION_RESTRICT;
-	}
-
-
-	if (foreign->type & DICT_FOREIGN_ON_UPDATE_CASCADE) {
-		f_key_info.update_method = FK_OPTION_CASCADE;
-	} else if (foreign->type & DICT_FOREIGN_ON_UPDATE_SET_NULL) {
-		f_key_info.update_method = FK_OPTION_SET_NULL;
-	} else if (foreign->type & DICT_FOREIGN_ON_UPDATE_NO_ACTION) {
-		f_key_info.update_method = FK_OPTION_NO_ACTION;
-	} else {
-		f_key_info.update_method = FK_OPTION_RESTRICT;
-	}
-
-	/* Load referenced table to update FK referenced key name. */
-	if (foreign->referenced_table == NULL) {
-
-		dict_table_t*	ref_table;
-
-		ut_ad(mutex_own(&dict_sys.mutex));
-		ref_table = dict_table_open_on_name(
-			foreign->referenced_table_name_lookup,
-			TRUE, FALSE, DICT_ERR_IGNORE_NONE);
-
-		if (ref_table == NULL) {
-
-			if (!thd_test_options(
-				thd, OPTION_NO_FOREIGN_KEY_CHECKS)) {
-				ib::info()
-					<< "Foreign Key referenced table "
-					<< foreign->referenced_table_name
-					<< " not found for foreign table "
-					<< foreign->foreign_table_name;
-			}
-		} else {
-
-			dict_table_close(ref_table, TRUE, FALSE);
-		}
-	}
-
-	if (foreign->referenced_index
-	    && foreign->referenced_index->name != NULL) {
-		referenced_key_name = thd_make_lex_string(
-			thd,
-			f_key_info.referenced_key_name,
-			foreign->referenced_index->name,
-			strlen(foreign->referenced_index->name),
-			1);
-	} else {
-		referenced_key_name = NULL;
-	}
-
-	f_key_info.referenced_key_name = referenced_key_name;
-
-	pf_key_info = (FOREIGN_KEY_INFO*) thd_memdup(thd, &f_key_info,
-						      sizeof(FOREIGN_KEY_INFO));
-
-	return(pf_key_info);
-}
-
-static void
-get_foreign_key_info2(
 	/*=================*/
-	FOREIGN_KEY_INFO& f_key_info, THD* thd, /*!< in: user thread handle */
+	THD*		thd, /*!< in: user thread handle */
 	TABLE_SHARE*	s,
 	dict_foreign_t* foreign) /*!< in: foreign key constraint */
 {
@@ -15425,6 +15287,16 @@ get_foreign_key_info2(
 	const char*  ptr;
 	LEX_CSTRING* referenced_key_name;
 	LEX_CSTRING* name = NULL;
+
+	FOREIGN_KEY_INFO* pf_key_info = (FOREIGN_KEY_INFO*)alloc_root(
+		&s->mem_root, sizeof(FOREIGN_KEY_INFO));
+	if (!pf_key_info) {
+		return NULL;
+	}
+	FOREIGN_KEY_INFO& f_key_info = *pf_key_info;
+
+	f_key_info.foreign_fields.empty();
+	f_key_info.referenced_fields.empty();
 
 	ptr		      = dict_remove_db_name(foreign->id);
 	f_key_info.foreign_id = s->lex_strdup(Lex_cstring(ptr, strlen(ptr)));
@@ -15524,82 +15396,7 @@ get_foreign_key_info2(
 	}
 
 	f_key_info.referenced_key_name = referenced_key_name;
-}
-
-/*******************************************************************//**
-Gets the list of foreign keys in this table.
-@return always 0, that is, always succeeds */
-
-int
-ha_innobase::get_foreign_key_list(
-/*==============================*/
-	THD*			thd,		/*!< in: user thread handle */
-	List<FOREIGN_KEY_INFO>*	f_key_list)	/*!< out: foreign key list */
-{
-	update_thd(ha_thd());
-
-	m_prebuilt->trx->op_info = "getting list of foreign keys";
-
-	mutex_enter(&dict_sys.mutex);
-
-	for (dict_foreign_set::iterator it
-		= m_prebuilt->table->foreign_set.begin();
-	     it != m_prebuilt->table->foreign_set.end();
-	     ++it) {
-
-		FOREIGN_KEY_INFO*	pf_key_info;
-		dict_foreign_t*		foreign = *it;
-
-		pf_key_info = get_foreign_key_info(thd, foreign);
-
-		if (pf_key_info != NULL) {
-			f_key_list->push_back(pf_key_info);
-		}
-	}
-
-	mutex_exit(&dict_sys.mutex);
-
-	m_prebuilt->trx->op_info = "";
-
-	return(0);
-}
-
-/*******************************************************************//**
-Gets the set of foreign keys where this table is the referenced table.
-@return always 0, that is, always succeeds */
-
-int
-ha_innobase::get_parent_foreign_key_list(
-/*=====================================*/
-	THD*			thd,		/*!< in: user thread handle */
-	List<FOREIGN_KEY_INFO>*	f_key_list)	/*!< out: foreign key list */
-{
-	update_thd(ha_thd());
-
-	m_prebuilt->trx->op_info = "getting list of referencing foreign keys";
-
-	mutex_enter(&dict_sys.mutex);
-
-	for (dict_foreign_set::iterator it
-		= m_prebuilt->table->referenced_set.begin();
-	     it != m_prebuilt->table->referenced_set.end();
-	     ++it) {
-
-		FOREIGN_KEY_INFO*	pf_key_info;
-		dict_foreign_t*		foreign = *it;
-
-		pf_key_info = get_foreign_key_info(thd, foreign);
-
-		if (pf_key_info != NULL) {
-			f_key_list->push_back(pf_key_info);
-		}
-	}
-
-	mutex_exit(&dict_sys.mutex);
-
-	m_prebuilt->trx->op_info = "";
-
-	return(0);
+	return pf_key_info;
 }
 
 /** Table list item structure is used to store only the table

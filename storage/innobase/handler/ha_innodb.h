@@ -218,13 +218,6 @@ public:
 
 	char* get_foreign_key_create_info() override;
 
-        int get_foreign_key_list(THD *thd,
-                                 List<FOREIGN_KEY_INFO> *f_key_list) override;
-
-	int get_parent_foreign_key_list(
-		THD*			thd,
-		List<FOREIGN_KEY_INFO>*	f_key_list) override;
-
 	bool can_switch_engines() override;
 
 	uint referenced_by_foreign_key() override;
@@ -506,6 +499,11 @@ protected:
 
         /** If mysql has locked with external_lock() */
         bool                    m_mysql_has_locked;
+
+private:
+	List<FOREIGN_KEY_INFO>*
+	build_foreign_list(THD* thd, dict_foreign_set& foreign_set,
+			   bool& err) const;
 };
 
 

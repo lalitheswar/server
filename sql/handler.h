@@ -3866,34 +3866,6 @@ public:
   */
   virtual bool can_switch_engines() { return true; }
   virtual int can_continue_handler_scan() { return 0; }
-  /**
-    Get the list of foreign keys in this table.
-
-    @remark Returns the set of foreign keys where this table is the
-            dependent or child table.
-
-    @param thd  The thread handle.
-    @param f_key_list[out]  The list of foreign keys.
-
-    @return The handler error code or zero for success.
-  */
-  virtual int
-  get_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list)
-  { return 0; }
-  /**
-    Get the list of foreign keys referencing this table.
-
-    @remark Returns the set of foreign keys where this table is the
-            referenced or parent table.
-
-    @param thd  The thread handle.
-    @param f_key_list[out]  The list of foreign keys.
-
-    @return The handler error code or zero for success.
-  */
-  virtual int
-  get_parent_foreign_key_list(THD *thd, List<FOREIGN_KEY_INFO> *f_key_list)
-  { return 0; }
   virtual uint referenced_by_foreign_key() { return 0;}
   virtual void init_table_handle_for_HANDLER()
   { return; }       /* prepare InnoDB for HANDLER */

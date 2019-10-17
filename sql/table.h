@@ -644,6 +644,7 @@ struct TABLE_SHARE
   Field **found_next_number_field;
   KEY  *key_info;			/* data of keys in database */
   List <FOREIGN_KEY_INFO> *foreign_keys;
+  List <FOREIGN_KEY_INFO> *referenced_keys;
   bool update_foreign_keys(THD *thd, Alter_info *alter_info);
   template<typename S>
   S* lex_strdup(const S &src)
