@@ -72,22 +72,29 @@ ib_wqueue_free(
 	ut_free(wq);
 }
 
-/****************************************************************//**
-Add a work item to the queue. */
+/** Add a work item to the queue.
+@param[in]	wq		work queue
+@param[in]	item		work item
+@param[in]	heap		memory heap to use for allocating
+				list node
+@param[in]	wq_locked	work queue locked */
 void
 ib_wqueue_add(
-/*==========*/
-	ib_wqueue_t*	wq,	/*!< in: work queue */
-	void*		item,	/*!< in: work item */
-	mem_heap_t*	heap)	/*!< in: memory heap to use for allocating the
-				list node */
+	ib_wqueue_t*	wq,
+	void*		item,
+	mem_heap_t*	heap,
+	bool		wq_locked)
 {
-	mutex_enter(&wq->mutex);
+	if (!wq_locked) {
+		mutex_enter(&wq->mutex);
+	}
 
 	ib_list_add_last(wq->items, item, heap);
 	os_event_set(wq->event);
 
-	mutex_exit(&wq->mutex);
+	if (!wq_locked) {
+		mutex_exit(&wq->mutex);
+	}
 }
 
 /****************************************************************//**
@@ -227,4 +234,18 @@ ib_wqueue_len(
 	mutex_exit(&wq->mutex);
 
         return(len);
+}
+
+/** Lock the mutex of the working queue
+@param[in,out]	wq	working queue to be locked. */
+void ib_wqueue_lock(ib_wqueue_t* wq)
+{
+	mutex_enter(&wq->mutex);
+}
+
+/** Unlock the mutex of the working queue
+@param[in,out]	wq	working queue to be unlocked. */
+void ib_wqueue_unlock(ib_wqueue_t* wq)
+{
+	mutex_exit(&wq->mutex);
 }

@@ -5388,11 +5388,12 @@ fts_t::fts_t(
 	const dict_table_t*	table,
 	mem_heap_t*		heap)
 	:
-	in_queue(0), added_synced(0), dict_locked(0),
+	added_synced(0), dict_locked(0),
 	bg_threads(0),
 	add_wq(NULL),
 	cache(NULL),
 	doc_col(ULINT_UNDEFINED),
+	in_queue(false),
 	fts_heap(heap)
 {
 	ut_a(table->fts == NULL);

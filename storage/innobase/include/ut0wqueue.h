@@ -54,15 +54,18 @@ ib_wqueue_free(
 /*===========*/
 	ib_wqueue_t*	wq);		/*!< in: work queue */
 
-/****************************************************************//**
-Add a work item to the queue. */
+/** Add a work item to the queue.
+@param[in]	wq		work queue
+@param[in]	item		work item
+@param[in]	heap		memory heap to use for allocating
+				list node
+@param[in]	wq_locked	work queue locked */
 void
 ib_wqueue_add(
-/*==========*/
-	ib_wqueue_t*	wq,		/*!< in: work queue */
-	void*		item,		/*!< in: work item */
-	mem_heap_t*	heap);		/*!< in: memory heap to use for
-					allocating the list node */
+	ib_wqueue_t*	wq,
+	void*		item,
+	mem_heap_t*	heap,
+	bool		wq_locked = false);
 
 /** Check if queue is empty.
 @param wq wait queue
@@ -101,5 +104,12 @@ ib_wqueue_len(
 /*==========*/
 	ib_wqueue_t*	wq);		/*<! in: work queue */
 
+/** Lock the mutex of the working queue
+@param[in,out]	wq	working queue to be locked */
+void ib_wqueue_lock(ib_wqueue_t* wq);
+
+/** Release the mutex of the working queue
+@param[in, out]	wq	working queue lock to be released */
+void ib_wqueue_unlock(ib_wqueue_t* wq);
 
 #endif /* IB_WORK_QUEUE_H */
