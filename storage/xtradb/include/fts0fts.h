@@ -285,9 +285,6 @@ struct fts_t {
 					fts_add_wq. */
 	ib_mutex_t		bg_threads_mutex;
 
-	/* Whether the table was added to fts_optimize_wq();
-	protected by bg_threads mutex */
-	unsigned 	in_queue:1;
 	/* Whether the ADDED table record sync-ed afer
 	crash recovery; protected by bg_threads mutex */
 	unsigned	added_synced:1;
@@ -310,6 +307,11 @@ struct fts_t {
 
 	ib_vector_t*	indexes;	/*!< Vector of FTS indexes, this is
 					mainly for caching purposes. */
+
+	/* Whether the table was added to fts_optimize_wq();
+	protected by fts_optimize_wq mutex */
+	bool		in_queue;
+
 	mem_heap_t*	fts_heap;	/*!< heap for fts_t allocation */
 };
 
